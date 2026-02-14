@@ -1,0 +1,1722 @@
+// กำหนด ID ของ Google Sheet ที่ใช้เก็บข้อมูล
+var SPREADSHEET_ID = '1kt0l2eKCbKvYvtLtnhDAleolzpxFB4fos6ZNQ87bDB0';
+var SHEET_NAME = 'Students';
+var DOCUMENTS_FOLDER_ID = '12CwpLW7vAf1492osJZSraprBJFaH9ItV';
+
+// ค่าคงที่สำหรับการทำงาน
+var CONFIG = {
+  PAGE_SIZE: 50,
+  MAX_FILE_SIZE: 5 * 1024 * 1024, // 5MB
+  ALLOWED_FILE_TYPES: ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'],
+  CACHE_DURATION: 10 * 60 * 1000 // 10 นาที
+};
+
+// ฟังก์ชันหลักสำหรับจัดการ GET requests
+function doGet(e) {
+  return handleRequest(e, 'GET');
+}
+
+// ฟังก์ชันหลักสำหรับจัดการ POST requests
+function doPost(e) {
+  return handleRequest(e, 'POST');
+}
+
+// ฟังก์ชันสำหรับจัดการ CORS preflight requests
+function doOptions() {
+  return HtmlService.createHtmlOutput('')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .setSandboxMode(HtmlService.SandboxMode.IFRAME)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+// ฟังก์ชันสร้าง response
+function createResponse(success, message, data) {
+  var response = {
+    success: success,
+    message: message,
+    timestamp: new Date().toISOString()
+  };
+  
+  if (data) {
+    response.data = data;
+  }
+  
+  var jsonResponse = JSON.stringify(response);
+  var output = ContentService.createTextOutput(jsonResponse);
+  output.setMimeType(ContentService.MimeType.JSON);
+  
+  return output;
+}
+
+// ฟังก์ชันหลักสำหรับจัดการ request ทั้งหมด
+function handleRequest(e, method) {
+  var action, params;
+  
+  try {
+    Logger.log('=== NEW REQUEST ===');
+    Logger.log('Method: ' + method);
+    
+    if (!e) {
+      e = { parameter: {} };
+    }
+    
+    // Parse parameters based on method
+    if (method === 'POST') {
+      if (e.postData && e.postData.type === 'application/json') {
+        try {
+          params = JSON.parse(e.postData.contents);
+          Logger.log('Parsed JSON data successfully');
+        } catch (parseError) {
+          Logger.log('JSON parse error: ' + parseError.toString());
+          return createResponse(false, 'Invalid JSON format');
+        }
+      } else if (e.postData && e.postData.type === 'application/x-www-form-urlencoded') {
+        params = e.parameter || {};
+        Logger.log('Using form parameters');
+      } else {
+        params = e.parameter || {};
+        Logger.log('Using default parameters');
+      }
+      action = params.action;
+    } else {
+      params = e.parameter || {};
+      action = params.action;
+    }
+    
+    if (!action) {
+      Logger.log('No action specified');
+      return createResponse(false, 'Action parameter is required');
+    }
+    
+    Logger.log('Action: ' + action);
+    Logger.log('Params: ' + JSON.stringify(params));
+    
+    var result;
+    switch(action) {
+      // Student management
+      case 'searchStudent':
+        result = searchStudent(params.query);
+        break;
+      case 'getAllStudents':
+        result = getAllStudents(params.page, params.pageSize);
+        break;
+      case 'searchStudents':
+        result = searchStudents(params.query, params.page, params.pageSize);
+        break;
+      case 'getStudent':
+        result = getStudent(params.studentId);
+        break;
+      case 'addStudent':
+        result = addStudent(params);
+        break;
+      case 'updateStudent':
+        result = updateStudent(params);
+        break;
+      case 'deleteStudent':
+        result = deleteStudent(params);
+        break;
+      case 'getStudentsPage':
+        result = getStudentsPage(params.page, params.pageSize, params.query);
+        break;
+      case 'importStudentsFromExcel':
+        result = importStudentsFromExcel(params.students);
+        break;
+      case 'bulkDeleteStudents':
+        result = bulkDeleteStudents(params.studentIds);
+        break;
+      
+      // Document management
+      case 'uploadDocument':
+        result = uploadDocumentBase64(params);
+        break;
+      case 'getDocument':
+        result = getDocument(params.studentId, params.documentType, params.guardianType);
+        break;
+      case 'getStudentDocuments':
+        result = getStudentDocuments(params.studentId);
+        break;
+      case 'deleteDocument':
+        result = deleteDocument(params.studentId, params.documentType, params.guardianType);
+        break;
+      
+      // Statistics and reports
+      case 'generateReport':
+        result = generateReport();
+        break;
+      case 'getStatistics':
+        result = getStatistics();
+        break;
+      case 'exportData':
+        result = exportData(params.format);
+        break;
+      
+      // Authentication
+      case 'adminLogin':
+        result = adminLogin(params);
+        break;
+      
+      // System management
+      case 'checkSheetStructure':
+        result = checkSheetStructure();
+        break;
+      case 'initializeSheet':
+        result = initializeSheet();
+        break;
+      case 'importSampleData':
+        result = importSampleData();
+        break;
+      case 'fixSharing':
+        result = fixAllFileSharing();
+        break;
+      case 'checkSharing':
+        result = checkFolderSharing();
+        break;
+      case 'test':
+        result = createResponse(true, 'API is working', { 
+          timestamp: new Date().toString(),
+          method: method,
+          params: params
+        });
+        break;
+      
+      default:
+        result = createResponse(false, 'Action not found: ' + action);
+    }
+    
+    return result;
+    
+  } catch (error) {
+    Logger.log('Error in handleRequest: ' + error.toString());
+    Logger.log('Stack: ' + error.stack);
+    return createResponse(false, 'Server error: ' + error.toString());
+  }
+}
+
+// ==================== SHEET MANAGEMENT ====================
+
+// ฟังก์ชันดึงชีท
+function getSheet() {
+  try {
+    var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+    var sheet = spreadsheet.getSheetByName(SHEET_NAME);
+    
+    if (!sheet) {
+      sheet = initializeSheet();
+    }
+    
+    return sheet;
+  } catch (error) {
+    Logger.log('Error getting sheet: ' + error.toString());
+    return initializeSheet();
+  }
+}
+
+// ฟังก์ชันเริ่มต้นชีท
+function initializeSheet() {
+  try {
+    var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+    var sheet = spreadsheet.insertSheet(SHEET_NAME);
+    
+    var headers = [
+      'studentId', 'studentName', 'educationLevel', 'major', 'class', 'shift',
+      'studentIdCard', 'studentHouseReg', 'guardianIdCardData', 'guardianHouseRegData',
+      'createdAt', 'updatedAt'
+    ];
+    
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    
+    // ตั้งค่าความกว้างคอลัมน์
+    sheet.setColumnWidth(1, 120);
+    sheet.setColumnWidth(2, 250);
+    sheet.setColumnWidth(3, 150);
+    sheet.setColumnWidth(4, 200);
+    sheet.setColumnWidth(5, 150);
+    sheet.setColumnWidth(6, 100);
+    sheet.setColumnWidth(7, 200);
+    sheet.setColumnWidth(8, 200);
+    sheet.setColumnWidth(9, 300);
+    sheet.setColumnWidth(10, 300);
+    sheet.setColumnWidth(11, 180);
+    sheet.setColumnWidth(12, 180);
+    
+    // ตรึงแถวหัวตาราง
+    sheet.setFrozenRows(1);
+    
+    // ตั้งค่ารูปแบบ
+    var headerRange = sheet.getRange(1, 1, 1, headers.length);
+    headerRange.setBackground('#3498db');
+    headerRange.setFontColor('#ffffff');
+    headerRange.setFontWeight('bold');
+    
+    return sheet;
+  } catch (error) {
+    Logger.log('Error initializing sheet: ' + error.toString());
+    return null;
+  }
+}
+
+// ฟังก์ชันตรวจสอบโครงสร้างชีท
+function checkSheetStructure() {
+  try {
+    var sheet = getSheet();
+    if (!sheet) {
+      return createResponse(false, 'Sheet not found');
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0];
+    
+    var requiredHeaders = [
+      'studentId', 'studentName', 'educationLevel', 'major', 'class', 'shift',
+      'studentIdCard', 'studentHouseReg', 'guardianIdCardData', 'guardianHouseRegData'
+    ];
+    
+    var missingHeaders = [];
+    var extraHeaders = [];
+    
+    for (var i = 0; i < requiredHeaders.length; i++) {
+      if (headers.indexOf(requiredHeaders[i]) === -1) {
+        missingHeaders.push(requiredHeaders[i]);
+      }
+    }
+    
+    for (var j = 0; j < headers.length; j++) {
+      if (requiredHeaders.indexOf(headers[j]) === -1 && headers[j]) {
+        extraHeaders.push(headers[j]);
+      }
+    }
+    
+    if (missingHeaders.length > 0) {
+      ensureColumnsExist();
+      return createResponse(false, 'Missing headers: ' + missingHeaders.join(', '), {
+        currentHeaders: headers,
+        missingHeaders: missingHeaders,
+        extraHeaders: extraHeaders
+      });
+    }
+    
+    return createResponse(true, 'Sheet structure is correct', {
+      headers: headers,
+      totalRows: data.length,
+      totalColumns: headers.length
+    });
+    
+  } catch (error) {
+    return createResponse(false, 'Error checking sheet: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันตรวจสอบและสร้างคอลัมน์ที่ขาด
+function ensureColumnsExist() {
+  try {
+    var sheet = getSheet();
+    if (!sheet) return false;
+    
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var requiredHeaders = [
+      'studentId', 'studentName', 'educationLevel', 'major', 'class', 'shift',
+      'studentIdCard', 'studentHouseReg', 'guardianIdCardData', 'guardianHouseRegData',
+      'createdAt', 'updatedAt'
+    ];
+    
+    var newHeaders = [];
+    var headersAdded = false;
+    
+    for (var i = 0; i < requiredHeaders.length; i++) {
+      if (headers.indexOf(requiredHeaders[i]) === -1) {
+        newHeaders.push(requiredHeaders[i]);
+        headersAdded = true;
+      }
+    }
+    
+    if (headersAdded && newHeaders.length > 0) {
+      var lastCol = sheet.getLastColumn();
+      sheet.getRange(1, lastCol + 1, 1, newHeaders.length).setValues([newHeaders]);
+      Logger.log('Added missing headers: ' + newHeaders.join(', '));
+    }
+    
+    return true;
+  } catch (error) {
+    Logger.log('Error ensuring columns exist: ' + error.toString());
+    return false;
+  }
+}
+
+// ==================== STUDENT MANAGEMENT ====================
+
+// ฟังก์ชันเพิ่มนักศึกษา
+function addStudent(data) {
+  try {
+    Logger.log('addStudent called with data: ' + JSON.stringify(data));
+    
+    if (!data) {
+      return createResponse(false, 'ไม่ได้รับข้อมูล');
+    }
+    
+    if (!data.studentId || !data.studentName || !data.educationLevel || !data.major) {
+      return createResponse(false, 'กรุณากรอกข้อมูลให้ครบถ้วน (รหัสนักศึกษา, ชื่อ-สกุล, ระดับการศึกษา, สาขาวิชา)');
+    }
+    
+    ensureColumnsExist();
+    
+    var sheet = getSheet();
+    if (!sheet) {
+      return createResponse(false, 'ไม่พบ Google Sheet');
+    }
+    
+    var existingData = sheet.getDataRange().getValues();
+    var headers = existingData[0];
+    
+    // ตรวจสอบรหัสนักศึกษาซ้ำ
+    var studentIdIndex = headers.indexOf('studentId');
+    for (var i = 1; i < existingData.length; i++) {
+      if (existingData[i][studentIdIndex] == data.studentId) {
+        return createResponse(false, 'รหัสนักศึกษานี้มีอยู่ในระบบแล้ว: ' + data.studentId);
+      }
+    }
+    
+    var newRow = new Array(headers.length).fill('');
+    
+    // กำหนดค่าต่างๆ
+    if (studentIdIndex !== -1) newRow[studentIdIndex] = data.studentId.toString().trim();
+    
+    var nameIndex = headers.indexOf('studentName');
+    if (nameIndex !== -1) newRow[nameIndex] = data.studentName.toString().trim();
+    
+    var levelIndex = headers.indexOf('educationLevel');
+    if (levelIndex !== -1) newRow[levelIndex] = data.educationLevel.toString().trim();
+    
+    var majorIndex = headers.indexOf('major');
+    if (majorIndex !== -1) newRow[majorIndex] = data.major.toString().trim();
+    
+    var classIndex = headers.indexOf('class');
+    if (classIndex !== -1) newRow[classIndex] = (data.class || '').toString().trim();
+    
+    var shiftIndex = headers.indexOf('shift');
+    if (shiftIndex !== -1) newRow[shiftIndex] = (data.shift || '').toString().trim();
+    
+    var idCardIndex = headers.indexOf('studentIdCard');
+    if (idCardIndex !== -1) newRow[idCardIndex] = '';
+    
+    var houseRegIndex = headers.indexOf('studentHouseReg');
+    if (houseRegIndex !== -1) newRow[houseRegIndex] = '';
+    
+    var guardianIdCardIndex = headers.indexOf('guardianIdCardData');
+    if (guardianIdCardIndex !== -1) {
+      newRow[guardianIdCardIndex] = '{"father":{"uploaded":false,"fileName":""},"mother":{"uploaded":false,"fileName":""},"other":{"uploaded":false,"fileName":""}}';
+    }
+    
+    var guardianHouseRegIndex = headers.indexOf('guardianHouseRegData');
+    if (guardianHouseRegIndex !== -1) {
+      newRow[guardianHouseRegIndex] = '{"father":{"uploaded":false,"fileName":""},"mother":{"uploaded":false,"fileName":""},"other":{"uploaded":false,"fileName":""}}';
+    }
+    
+    var createdAtIndex = headers.indexOf('createdAt');
+    if (createdAtIndex !== -1) {
+      newRow[createdAtIndex] = new Date().toISOString();
+    }
+    
+    var updatedAtIndex = headers.indexOf('updatedAt');
+    if (updatedAtIndex !== -1) {
+      newRow[updatedAtIndex] = new Date().toISOString();
+    }
+    
+    sheet.appendRow(newRow);
+    SpreadsheetApp.flush();
+    
+    Logger.log('Student added successfully: ' + data.studentName);
+    return createResponse(true, 'เพิ่มนักศึกษาเรียบร้อยแล้ว: ' + data.studentName, {
+      studentId: data.studentId,
+      studentName: data.studentName
+    });
+    
+  } catch (error) {
+    Logger.log('Error in addStudent: ' + error.toString());
+    Logger.log('Stack: ' + error.stack);
+    return createResponse(false, 'เกิดข้อผิดพลาด: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันอัปเดทข้อมูลนักศึกษา
+function updateStudent(data) {
+  try {
+    var sheet = getSheet();
+    if (!sheet) {
+      return createResponse(false, 'Sheet not found');
+    }
+    
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    
+    var existingData = sheet.getDataRange().getValues();
+    for (var i = 1; i < existingData.length; i++) {
+      if (existingData[i][headers.indexOf('studentId')] == data.studentId) {
+        var row = i + 1;
+        
+        if (data.studentName) {
+          sheet.getRange(row, headers.indexOf('studentName') + 1).setValue(data.studentName);
+        }
+        if (data.educationLevel) {
+          sheet.getRange(row, headers.indexOf('educationLevel') + 1).setValue(data.educationLevel);
+        }
+        if (data.major) {
+          sheet.getRange(row, headers.indexOf('major') + 1).setValue(data.major);
+        }
+        if (data.class !== undefined) {
+          sheet.getRange(row, headers.indexOf('class') + 1).setValue(data.class);
+        }
+        if (data.shift !== undefined) {
+          sheet.getRange(row, headers.indexOf('shift') + 1).setValue(data.shift);
+        }
+        
+        var updatedAtIndex = headers.indexOf('updatedAt');
+        if (updatedAtIndex !== -1) {
+          sheet.getRange(row, updatedAtIndex + 1).setValue(new Date().toISOString());
+        }
+        
+        return createResponse(true, 'อัปเดทข้อมูลสำเร็จ');
+      }
+    }
+    
+    return createResponse(false, 'ไม่พบนักศึกษา: ' + data.studentId);
+  } catch (error) {
+    Logger.log('Error in updateStudent: ' + error.toString());
+    return createResponse(false, 'Error updating student: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันลบนักศึกษา
+function deleteStudent(data) {
+  try {
+    var sheet = getSheet();
+    if (!sheet) {
+      return createResponse(false, 'Sheet not found');
+    }
+    
+    var dataRange = sheet.getDataRange().getValues();
+    var headers = dataRange[0];
+    
+    for (var i = 1; i < dataRange.length; i++) {
+      if (dataRange[i][headers.indexOf('studentId')] == data.studentId) {
+        // ลบเอกสารที่เกี่ยวข้อง
+        deleteStudentDocuments(data.studentId);
+        
+        // ลบแถว
+        sheet.deleteRow(i + 1);
+        return createResponse(true, 'ลบข้อมูลนักศึกษาสำเร็จ');
+      }
+    }
+    
+    return createResponse(false, 'ไม่พบนักศึกษา: ' + data.studentId);
+  } catch (error) {
+    Logger.log('Error in deleteStudent: ' + error.toString());
+    return createResponse(false, 'Error deleting student: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันลบนักศึกษาหลายคน
+function bulkDeleteStudents(studentIds) {
+  try {
+    if (!studentIds || !studentIds.length) {
+      return createResponse(false, 'กรุณาระบุรหัสนักศึกษา');
+    }
+    
+    var sheet = getSheet();
+    if (!sheet) {
+      return createResponse(false, 'Sheet not found');
+    }
+    
+    var dataRange = sheet.getDataRange().getValues();
+    var headers = dataRange[0];
+    var studentIdIndex = headers.indexOf('studentId');
+    
+    var deletedCount = 0;
+    var notFoundIds = [];
+    
+    // ลบจากล่างขึ้นบนเพื่อป้องกัน index เลื่อน
+    for (var i = dataRange.length - 1; i >= 1; i--) {
+      var currentId = dataRange[i][studentIdIndex].toString();
+      if (studentIds.indexOf(currentId) !== -1) {
+        deleteStudentDocuments(currentId);
+        sheet.deleteRow(i + 1);
+        deletedCount++;
+      }
+    }
+    
+    return createResponse(true, 'ลบข้อมูลสำเร็จ ' + deletedCount + ' รายการ');
+    
+  } catch (error) {
+    Logger.log('Error in bulkDeleteStudents: ' + error.toString());
+    return createResponse(false, 'Error deleting students: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันดึงข้อมูลนักศึกษาตามรหัส
+function getStudent(studentId) {
+  try {
+    var sheet = getSheet();
+    if (!sheet) {
+      return createResponse(false, 'Sheet not found');
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0];
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][headers.indexOf('studentId')] == studentId) {
+        var guardianData = getGuardianDocuments(studentId);
+        
+        var student = {
+          id: studentId,
+          name: data[i][headers.indexOf('studentName')] || '',
+          level: data[i][headers.indexOf('educationLevel')] || '',
+          major: data[i][headers.indexOf('major')] || '',
+          class: data[i][headers.indexOf('class')] || '',
+          shift: data[i][headers.indexOf('shift')] || '',
+          documents: {
+            studentIdCard: {
+              uploaded: !!data[i][headers.indexOf('studentIdCard')],
+              fileName: data[i][headers.indexOf('studentIdCard')] || ''
+            },
+            studentHouseReg: {
+              uploaded: !!data[i][headers.indexOf('studentHouseReg')],
+              fileName: data[i][headers.indexOf('studentHouseReg')] || ''
+            },
+            guardianIdCard: guardianData.guardianIdCard,
+            guardianHouseReg: guardianData.guardianHouseReg
+          }
+        };
+        return createResponse(true, 'พบข้อมูลนักศึกษา', student);
+      }
+    }
+    
+    return createResponse(false, 'ไม่พบนักศึกษา: ' + studentId);
+  } catch (error) {
+    Logger.log('Error in getStudent: ' + error.toString());
+    return createResponse(false, 'Error retrieving student: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันดึงข้อมูลนักศึกษาทั้งหมดแบบแบ่งหน้า
+function getAllStudents(page, pageSize) {
+  try {
+    var pageNum = parseInt(page) || 1;
+    var size = parseInt(pageSize) || CONFIG.PAGE_SIZE;
+    
+    var sheet = getSheet();
+    if (!sheet) {
+      return createResponse(false, 'Sheet not found');
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    if (data.length < 2) {
+      return createResponse(true, 'No students found', {
+        students: [],
+        totalCount: 0,
+        page: pageNum,
+        pageSize: size
+      });
+    }
+    
+    var headers = data[0];
+    var allStudents = [];
+    
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var studentId = row[headers.indexOf('studentId')];
+      
+      if (!studentId) continue;
+      
+      var uploadedDocs = 0;
+      var totalDocs = 8;
+      
+      // ตรวจสอบเอกสารนักศึกษา
+      var studentDocColumns = ['studentIdCard', 'studentHouseReg'];
+      for (var j = 0; j < studentDocColumns.length; j++) {
+        var colIndex = headers.indexOf(studentDocColumns[j]);
+        if (colIndex !== -1 && row[colIndex]) {
+          uploadedDocs++;
+        }
+      }
+      
+      // ตรวจสอบเอกสารผู้ปกครอง
+      var guardianData = getGuardianDocuments(studentId);
+      var guardianDocs = [
+        guardianData.guardianIdCard.father,
+        guardianData.guardianIdCard.mother,
+        guardianData.guardianIdCard.other,
+        guardianData.guardianHouseReg.father,
+        guardianData.guardianHouseReg.mother,
+        guardianData.guardianHouseReg.other
+      ];
+      
+      for (var k = 0; k < guardianDocs.length; k++) {
+        if (guardianDocs[k].uploaded) {
+          uploadedDocs++;
+        }
+      }
+      
+      allStudents.push({
+        id: studentId,
+        name: row[headers.indexOf('studentName')] || '',
+        level: row[headers.indexOf('educationLevel')] || '',
+        major: row[headers.indexOf('major')] || '',
+        class: row[headers.indexOf('class')] || '',
+        shift: row[headers.indexOf('shift')] || '',
+        docs: uploadedDocs + '/' + totalDocs,
+        uploadedDocs: uploadedDocs,
+        totalDocs: totalDocs
+      });
+    }
+    
+    // คำนวณ pagination
+    var startIndex = (pageNum - 1) * size;
+    var endIndex = Math.min(startIndex + size, allStudents.length);
+    var paginatedStudents = allStudents.slice(startIndex, endIndex);
+    
+    return createResponse(true, 'Students retrieved', {
+      students: paginatedStudents,
+      totalCount: allStudents.length,
+      page: pageNum,
+      pageSize: size,
+      totalPages: Math.ceil(allStudents.length / size)
+    });
+    
+  } catch (error) {
+    Logger.log('Error in getAllStudents: ' + error.toString());
+    return createResponse(false, 'Error retrieving students: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันค้นหานักศึกษา
+function searchStudent(query) {
+  try {
+    var sheet = getSheet();
+    if (!sheet) {
+      return createResponse(false, 'Sheet not found');
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    if (data.length < 2) {
+      return createResponse(false, 'No student data found');
+    }
+    
+    var headers = data[0];
+    
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var studentId = row[headers.indexOf('studentId')];
+      var studentName = row[headers.indexOf('studentName')];
+      
+      if (studentId && (studentId.toString().includes(query) || 
+          (studentName && studentName.toString().toLowerCase().includes(query.toLowerCase())))) {
+        
+        var guardianData = getGuardianDocuments(studentId);
+        
+        var studentData = {
+          studentId: studentId,
+          studentName: studentName,
+          educationLevel: row[headers.indexOf('educationLevel')] || '',
+          major: row[headers.indexOf('major')] || '',
+          class: row[headers.indexOf('class')] || '',
+          shift: row[headers.indexOf('shift')] || '',
+          documents: {
+            studentIdCard: {
+              uploaded: !!row[headers.indexOf('studentIdCard')],
+              fileName: row[headers.indexOf('studentIdCard')] || ''
+            },
+            studentHouseReg: {
+              uploaded: !!row[headers.indexOf('studentHouseReg')],
+              fileName: row[headers.indexOf('studentHouseReg')] || ''
+            },
+            guardianIdCard: guardianData.guardianIdCard,
+            guardianHouseReg: guardianData.guardianHouseReg
+          }
+        };
+        return createResponse(true, 'Student found', studentData);
+      }
+    }
+    
+    return createResponse(false, 'ไม่พบนักศึกษา: ' + query);
+  } catch (error) {
+    Logger.log('Error in searchStudent: ' + error.toString());
+    return createResponse(false, 'Search error: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันค้นหานักศึกษาหลายคน
+function searchStudents(query, page, pageSize) {
+  try {
+    var pageNum = parseInt(page) || 1;
+    var size = parseInt(pageSize) || CONFIG.PAGE_SIZE;
+    
+    var sheet = getSheet();
+    if (!sheet) {
+      return createResponse(true, 'No students found', {
+        students: [],
+        totalCount: 0,
+        page: pageNum,
+        pageSize: size
+      });
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    if (data.length < 2) {
+      return createResponse(true, 'No students found', {
+        students: [],
+        totalCount: 0,
+        page: pageNum,
+        pageSize: size
+      });
+    }
+    
+    var headers = data[0];
+    var filteredStudents = [];
+    
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var studentId = row[headers.indexOf('studentId')];
+      var studentName = row[headers.indexOf('studentName')];
+      
+      if (!studentId) continue;
+      
+      if (studentId.toString().includes(query) || 
+          (studentName && studentName.toString().toLowerCase().includes(query.toLowerCase()))) {
+        
+        var uploadedDocs = 0;
+        var totalDocs = 8;
+        
+        // ตรวจสอบเอกสารนักศึกษา
+        var studentDocColumns = ['studentIdCard', 'studentHouseReg'];
+        for (var j = 0; j < studentDocColumns.length; j++) {
+          var colIndex = headers.indexOf(studentDocColumns[j]);
+          if (colIndex !== -1 && row[colIndex]) {
+            uploadedDocs++;
+          }
+        }
+        
+        // ตรวจสอบเอกสารผู้ปกครอง
+        var guardianData = getGuardianDocuments(studentId);
+        var guardianDocs = [
+          guardianData.guardianIdCard.father,
+          guardianData.guardianIdCard.mother,
+          guardianData.guardianIdCard.other,
+          guardianData.guardianHouseReg.father,
+          guardianData.guardianHouseReg.mother,
+          guardianData.guardianHouseReg.other
+        ];
+        
+        for (var k = 0; k < guardianDocs.length; k++) {
+          if (guardianDocs[k].uploaded) {
+            uploadedDocs++;
+          }
+        }
+        
+        filteredStudents.push({
+          id: studentId,
+          name: studentName || '',
+          level: row[headers.indexOf('educationLevel')] || '',
+          major: row[headers.indexOf('major')] || '',
+          class: row[headers.indexOf('class')] || '',
+          shift: row[headers.indexOf('shift')] || '',
+          docs: uploadedDocs + '/' + totalDocs,
+          uploadedDocs: uploadedDocs,
+          totalDocs: totalDocs
+        });
+      }
+    }
+    
+    // คำนวณ pagination
+    var startIndex = (pageNum - 1) * size;
+    var endIndex = Math.min(startIndex + size, filteredStudents.length);
+    var paginatedStudents = filteredStudents.slice(startIndex, endIndex);
+    
+    return createResponse(true, 'Search completed', {
+      students: paginatedStudents,
+      totalCount: filteredStudents.length,
+      page: pageNum,
+      pageSize: size,
+      totalPages: Math.ceil(filteredStudents.length / size)
+    });
+    
+  } catch (error) {
+    Logger.log('Error in searchStudents: ' + error.toString());
+    return createResponse(false, 'Search error: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันดึงข้อมูลเอกสารผู้ปกครอง
+function getGuardianDocuments(studentId) {
+  try {
+    var sheet = getSheet();
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0];
+    
+    var guardianIdCard = {
+      father: { uploaded: false, fileName: '' },
+      mother: { uploaded: false, fileName: '' },
+      other: { uploaded: false, fileName: '' }
+    };
+    
+    var guardianHouseReg = {
+      father: { uploaded: false, fileName: '' },
+      mother: { uploaded: false, fileName: '' },
+      other: { uploaded: false, fileName: '' }
+    };
+    
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      if (row[headers.indexOf('studentId')] == studentId) {
+        var guardianIdCardCol = headers.indexOf('guardianIdCardData');
+        var guardianHouseRegCol = headers.indexOf('guardianHouseRegData');
+        
+        if (guardianIdCardCol !== -1 && row[guardianIdCardCol]) {
+          try {
+            var idCardData = JSON.parse(row[guardianIdCardCol]);
+            guardianIdCard = idCardData;
+          } catch (e) {
+            Logger.log('Error parsing guardianIdCardData: ' + e.toString());
+          }
+        }
+        
+        if (guardianHouseRegCol !== -1 && row[guardianHouseRegCol]) {
+          try {
+            var houseRegData = JSON.parse(row[guardianHouseRegCol]);
+            guardianHouseReg = houseRegData;
+          } catch (e) {
+            Logger.log('Error parsing guardianHouseRegData: ' + e.toString());
+          }
+        }
+        break;
+      }
+    }
+    
+    return {
+      guardianIdCard: guardianIdCard,
+      guardianHouseReg: guardianHouseReg
+    };
+  } catch (error) {
+    Logger.log('Error in getGuardianDocuments: ' + error.toString());
+    return {
+      guardianIdCard: {
+        father: { uploaded: false, fileName: '' },
+        mother: { uploaded: false, fileName: '' },
+        other: { uploaded: false, fileName: '' }
+      },
+      guardianHouseReg: {
+        father: { uploaded: false, fileName: '' },
+        mother: { uploaded: false, fileName: '' },
+        other: { uploaded: false, fileName: '' }
+      }
+    };
+  }
+}
+
+// ==================== DOCUMENT MANAGEMENT ====================
+
+// ฟังก์ชันอัปโหลดเอกสาร
+function uploadDocumentBase64(data) {
+  try {
+    var studentId = data.studentId;
+    var documentType = data.documentType;
+    var fileData = data.fileData;
+    var contentType = data.contentType;
+    var filename = data.filename || 'document';
+    var guardianType = data.guardianType;
+    
+    if (!studentId || !documentType || !fileData) {
+      return createResponse(false, 'Student ID, document type and file data are required');
+    }
+    
+    // ตรวจสอบขนาดไฟล์
+    var fileSize = Math.ceil((fileData.length * 3) / 4);
+    if (fileSize > CONFIG.MAX_FILE_SIZE) {
+      return createResponse(false, 'ไฟล์มีขนาดใหญ่เกินไป (สูงสุด 5MB)');
+    }
+    
+    // ตรวจสอบประเภทไฟล์
+    if (!CONFIG.ALLOWED_FILE_TYPES.includes(contentType)) {
+      return createResponse(false, 'รองรับเฉพาะไฟล์ PDF, JPG, PNG เท่านั้น');
+    }
+    
+    var sheet = getSheet();
+    var studentExists = false;
+    var studentRow = -1;
+    var dataRange = sheet.getDataRange().getValues();
+    var headers = dataRange[0];
+    
+    for (var i = 1; i < dataRange.length; i++) {
+      if (dataRange[i][headers.indexOf('studentId')] == studentId) {
+        studentExists = true;
+        studentRow = i;
+        break;
+      }
+    }
+    
+    if (!studentExists) {
+      return createResponse(false, 'ไม่พบนักศึกษา: ' + studentId);
+    }
+    
+    var folder = DriveApp.getFolderById(DOCUMENTS_FOLDER_ID);
+    var fileName = generateFileName(studentId, documentType, filename, guardianType);
+    
+    var blob = Utilities.newBlob(Utilities.base64Decode(fileData), contentType, fileName);
+    var file = folder.createFile(blob);
+    
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    
+    var updated = updateDocumentRecord(studentId, documentType, fileName, guardianType, studentRow + 1);
+    
+    if (updated) {
+      var fileId = file.getId();
+      var directDownloadUrl = 'https://drive.google.com/uc?export=download&id=' + fileId;
+      
+      return createResponse(true, 'อัปโหลดเอกสารสำเร็จ', { 
+        fileUrl: directDownloadUrl,
+        fileName: fileName,
+        webViewUrl: file.getUrl(),
+        directDownloadUrl: directDownloadUrl,
+        fileId: fileId
+      });
+    } else {
+      file.setTrashed(true);
+      return createResponse(false, 'Failed to update document record');
+    }
+  } catch (error) {
+    Logger.log('Error in uploadDocumentBase64: ' + error.toString());
+    return createResponse(false, 'Error uploading document: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันสร้างชื่อไฟล์
+function generateFileName(studentId, documentType, originalName, guardianType) {
+  var prefix = '';
+  var extension = originalName ? originalName.split('.').pop() : 'pdf';
+  
+  switch(documentType) {
+    case 'studentIdCard':
+      prefix = 'student_id';
+      break;
+    case 'studentHouseReg':
+      prefix = 'student_house';
+      break;
+    case 'guardianIdCard':
+      prefix = 'guardian_id_' + (guardianType || 'unknown');
+      break;
+    case 'guardianHouseReg':
+      prefix = 'guardian_house_' + (guardianType || 'unknown');
+      break;
+    default:
+      prefix = 'document';
+  }
+  
+  var timestamp = new Date().getTime();
+  return prefix + '_' + studentId + '_' + timestamp + '.' + extension;
+}
+
+// ฟังก์ชันอัปเดทข้อมูลเอกสาร
+function updateDocumentRecord(studentId, documentType, fileName, guardianType, rowNumber) {
+  try {
+    var sheet = getSheet();
+    if (!sheet) {
+      return false;
+    }
+    
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    
+    switch(documentType) {
+      case 'studentIdCard':
+        var columnIndex = headers.indexOf('studentIdCard');
+        if (columnIndex !== -1) {
+          sheet.getRange(rowNumber, columnIndex + 1).setValue(fileName);
+          return true;
+        }
+        break;
+        
+      case 'studentHouseReg':
+        var columnIndex = headers.indexOf('studentHouseReg');
+        if (columnIndex !== -1) {
+          sheet.getRange(rowNumber, columnIndex + 1).setValue(fileName);
+          return true;
+        }
+        break;
+        
+      case 'guardianIdCard':
+        var columnIndex = headers.indexOf('guardianIdCardData');
+        if (columnIndex === -1) {
+          sheet.getRange(1, headers.length + 1).setValue('guardianIdCardData');
+          headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+          columnIndex = headers.length - 1;
+        }
+        
+        var currentData = sheet.getRange(rowNumber, columnIndex + 1).getValue();
+        var guardianData = {};
+        
+        if (currentData) {
+          try {
+            guardianData = JSON.parse(currentData);
+          } catch (e) {
+            guardianData = {
+              father: { uploaded: false, fileName: '' },
+              mother: { uploaded: false, fileName: '' },
+              other: { uploaded: false, fileName: '' }
+            };
+          }
+        } else {
+          guardianData = {
+            father: { uploaded: false, fileName: '' },
+            mother: { uploaded: false, fileName: '' },
+            other: { uploaded: false, fileName: '' }
+          };
+        }
+        
+        if (guardianType && guardianData[guardianType]) {
+          guardianData[guardianType] = {
+            uploaded: true,
+            fileName: fileName
+          };
+        }
+        
+        sheet.getRange(rowNumber, columnIndex + 1).setValue(JSON.stringify(guardianData));
+        return true;
+        break;
+        
+      case 'guardianHouseReg':
+        var columnIndex = headers.indexOf('guardianHouseRegData');
+        if (columnIndex === -1) {
+          sheet.getRange(1, headers.length + 1).setValue('guardianHouseRegData');
+          headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+          columnIndex = headers.length - 1;
+        }
+        
+        var currentData = sheet.getRange(rowNumber, columnIndex + 1).getValue();
+        var guardianData = {};
+        
+        if (currentData) {
+          try {
+            guardianData = JSON.parse(currentData);
+          } catch (e) {
+            guardianData = {
+              father: { uploaded: false, fileName: '' },
+              mother: { uploaded: false, fileName: '' },
+              other: { uploaded: false, fileName: '' }
+            };
+          }
+        } else {
+          guardianData = {
+            father: { uploaded: false, fileName: '' },
+            mother: { uploaded: false, fileName: '' },
+            other: { uploaded: false, fileName: '' }
+          };
+        }
+        
+        if (guardianType && guardianData[guardianType]) {
+          guardianData[guardianType] = {
+            uploaded: true,
+            fileName: fileName
+          };
+        }
+        
+        sheet.getRange(rowNumber, columnIndex + 1).setValue(JSON.stringify(guardianData));
+        return true;
+        break;
+    }
+    
+    return false;
+  } catch (error) {
+    Logger.log('Error updating document record: ' + error.toString());
+    return false;
+  }
+}
+
+// ฟังก์ชันดึงข้อมูลเอกสาร
+function getDocument(studentId, documentType, guardianType) {
+  try {
+    var sheet = getSheet();
+    if (!sheet) {
+      return createResponse(false, 'Sheet not found');
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0];
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][headers.indexOf('studentId')] == studentId) {
+        var fileName = '';
+        
+        switch(documentType) {
+          case 'studentIdCard':
+            fileName = data[i][headers.indexOf('studentIdCard')];
+            break;
+          case 'studentHouseReg':
+            fileName = data[i][headers.indexOf('studentHouseReg')];
+            break;
+          case 'guardianIdCard':
+            var guardianDataCol = headers.indexOf('guardianIdCardData');
+            if (guardianDataCol !== -1 && data[i][guardianDataCol]) {
+              try {
+                var guardianData = JSON.parse(data[i][guardianDataCol]);
+                if (guardianType && guardianData[guardianType] && guardianData[guardianType].uploaded) {
+                  fileName = guardianData[guardianType].fileName;
+                }
+              } catch (e) {
+                Logger.log('Error parsing guardianIdCardData: ' + e.toString());
+              }
+            }
+            break;
+          case 'guardianHouseReg':
+            var guardianDataCol = headers.indexOf('guardianHouseRegData');
+            if (guardianDataCol !== -1 && data[i][guardianDataCol]) {
+              try {
+                var guardianData = JSON.parse(data[i][guardianDataCol]);
+                if (guardianType && guardianData[guardianType] && guardianData[guardianType].uploaded) {
+                  fileName = guardianData[guardianType].fileName;
+                }
+              } catch (e) {
+                Logger.log('Error parsing guardianHouseRegData: ' + e.toString());
+              }
+            }
+            break;
+        }
+        
+        if (fileName && fileName !== '') {
+          var folder = DriveApp.getFolderById(DOCUMENTS_FOLDER_ID);
+          var files = folder.getFilesByName(fileName);
+          
+          if (files.hasNext()) {
+            var file = files.next();
+            
+            var fileId = file.getId();
+            var directDownloadUrl = 'https://drive.google.com/uc?export=download&id=' + fileId;
+            
+            if (file.getSharingAccess() !== DriveApp.Access.ANYONE_WITH_LINK) {
+              file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+            }
+            
+            return createResponse(true, 'Document found', { 
+              fileUrl: directDownloadUrl,
+              fileName: fileName,
+              webViewUrl: file.getUrl(),
+              directDownloadUrl: directDownloadUrl,
+              fileId: fileId
+            });
+          }
+        }
+        
+        return createResponse(false, 'ไม่พบเอกสารสำหรับนักศึกษา: ' + studentId);
+      }
+    }
+    
+    return createResponse(false, 'ไม่พบนักศึกษา: ' + studentId);
+  } catch (error) {
+    Logger.log('Error in getDocument: ' + error.toString());
+    return createResponse(false, 'Error retrieving document: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันลบเอกสาร
+function deleteDocument(studentId, documentType, guardianType) {
+  try {
+    var sheet = getSheet();
+    if (!sheet) {
+      return createResponse(false, 'Sheet not found');
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0];
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][headers.indexOf('studentId')] == studentId) {
+        var fileName = '';
+        var columnIndex = -1;
+        
+        switch(documentType) {
+          case 'studentIdCard':
+            columnIndex = headers.indexOf('studentIdCard');
+            fileName = data[i][columnIndex];
+            if (columnIndex !== -1) {
+              sheet.getRange(i + 1, columnIndex + 1).setValue('');
+            }
+            break;
+          case 'studentHouseReg':
+            columnIndex = headers.indexOf('studentHouseReg');
+            fileName = data[i][columnIndex];
+            if (columnIndex !== -1) {
+              sheet.getRange(i + 1, columnIndex + 1).setValue('');
+            }
+            break;
+          case 'guardianIdCard':
+            columnIndex = headers.indexOf('guardianIdCardData');
+            if (columnIndex !== -1 && data[i][columnIndex]) {
+              try {
+                var guardianData = JSON.parse(data[i][columnIndex]);
+                if (guardianType && guardianData[guardianType]) {
+                  fileName = guardianData[guardianType].fileName;
+                  guardianData[guardianType] = { uploaded: false, fileName: '' };
+                  sheet.getRange(i + 1, columnIndex + 1).setValue(JSON.stringify(guardianData));
+                }
+              } catch (e) {
+                Logger.log('Error parsing guardianIdCardData: ' + e.toString());
+              }
+            }
+            break;
+          case 'guardianHouseReg':
+            columnIndex = headers.indexOf('guardianHouseRegData');
+            if (columnIndex !== -1 && data[i][columnIndex]) {
+              try {
+                var guardianData = JSON.parse(data[i][columnIndex]);
+                if (guardianType && guardianData[guardianType]) {
+                  fileName = guardianData[guardianType].fileName;
+                  guardianData[guardianType] = { uploaded: false, fileName: '' };
+                  sheet.getRange(i + 1, columnIndex + 1).setValue(JSON.stringify(guardianData));
+                }
+              } catch (e) {
+                Logger.log('Error parsing guardianHouseRegData: ' + e.toString());
+              }
+            }
+            break;
+        }
+        
+        if (fileName) {
+          var folder = DriveApp.getFolderById(DOCUMENTS_FOLDER_ID);
+          var files = folder.getFilesByName(fileName);
+          while (files.hasNext()) {
+            var file = files.next();
+            file.setTrashed(true);
+          }
+        }
+        
+        return createResponse(true, 'ลบเอกสารสำเร็จ');
+      }
+    }
+    
+    return createResponse(false, 'ไม่พบเอกสาร');
+  } catch (error) {
+    Logger.log('Error in deleteDocument: ' + error.toString());
+    return createResponse(false, 'Error deleting document: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันดึงข้อมูลเอกสารทั้งหมดของนักศึกษา
+function getStudentDocuments(studentId) {
+  try {
+    var sheet = getSheet();
+    if (!sheet) {
+      return createResponse(false, 'Sheet not found');
+    }
+    
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0];
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][headers.indexOf('studentId')] == studentId) {
+        var guardianData = getGuardianDocuments(studentId);
+        
+        var documents = {
+          studentIdCard: {
+            uploaded: !!data[i][headers.indexOf('studentIdCard')],
+            fileName: data[i][headers.indexOf('studentIdCard')] || ''
+          },
+          studentHouseReg: {
+            uploaded: !!data[i][headers.indexOf('studentHouseReg')],
+            fileName: data[i][headers.indexOf('studentHouseReg')] || ''
+          },
+          guardianIdCard: guardianData.guardianIdCard,
+          guardianHouseReg: guardianData.guardianHouseReg
+        };
+        
+        return createResponse(true, 'Student documents retrieved', documents);
+      }
+    }
+    
+    return createResponse(false, 'ไม่พบนักศึกษา: ' + studentId);
+  } catch (error) {
+    Logger.log('Error in getStudentDocuments: ' + error.toString());
+    return createResponse(false, 'Error retrieving student documents: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันลบเอกสารของนักศึกษา
+function deleteStudentDocuments(studentId) {
+  try {
+    var folder = DriveApp.getFolderById(DOCUMENTS_FOLDER_ID);
+    var files = folder.getFiles();
+    
+    while (files.hasNext()) {
+      var file = files.next();
+      if (file.getName().includes(studentId)) {
+        file.setTrashed(true);
+      }
+    }
+  } catch (error) {
+    Logger.log('Error deleting documents: ' + error.toString());
+  }
+}
+
+// ==================== STATISTICS AND REPORTS ====================
+
+// ฟังก์ชันสร้างรายงานสรุป
+function generateReport() {
+  try {
+    var sheet = getSheet();
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0];
+    
+    if (data.length < 2) {
+      return createResponse(false, 'ไม่มีข้อมูลนักเรียน');
+    }
+    
+    var report = {
+      totalStudents: data.length - 1,
+      byLevel: {},
+      byMajor: {},
+      byShift: {},
+      documentStats: {
+        totalWithIdCard: 0,
+        totalWithHouseReg: 0,
+        completeDocuments: 0
+      },
+      educationLevels: {},
+      classDistribution: {}
+    };
+    
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var level = row[headers.indexOf('educationLevel')] || 'ไม่ระบุ';
+      var major = row[headers.indexOf('major')] || 'ไม่ระบุ';
+      var shift = row[headers.indexOf('shift')] || 'ไม่ระบุ';
+      var studentClass = row[headers.indexOf('class')] || 'ไม่ระบุ';
+      
+      var hasIdCard = !!row[headers.indexOf('studentIdCard')];
+      var hasHouseReg = !!row[headers.indexOf('studentHouseReg')];
+      
+      // นับตามระดับ
+      report.byLevel[level] = (report.byLevel[level] || 0) + 1;
+      
+      // นับตามสาขา
+      report.byMajor[major] = (report.byMajor[major] || 0) + 1;
+      
+      // นับตามรอบเรียน
+      report.byShift[shift] = (report.byShift[shift] || 0) + 1;
+      
+      // นับตามชั้นเรียน
+      report.classDistribution[studentClass] = (report.classDistribution[studentClass] || 0) + 1;
+      
+      // แยกตามระดับการศึกษา
+      if (!report.educationLevels[level]) {
+        report.educationLevels[level] = {
+          total: 0,
+          byMajor: {}
+        };
+      }
+      report.educationLevels[level].total++;
+      report.educationLevels[level].byMajor[major] = (report.educationLevels[level].byMajor[major] || 0) + 1;
+      
+      if (hasIdCard) report.documentStats.totalWithIdCard++;
+      if (hasHouseReg) report.documentStats.totalWithHouseReg++;
+      if (hasIdCard && hasHouseReg) report.documentStats.completeDocuments++;
+    }
+    
+    return createResponse(true, 'รายงานสรุป', report);
+  } catch (error) {
+    Logger.log('Error generating report: ' + error.toString());
+    return createResponse(false, 'Error generating report: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันดึงสถิติ
+function getStatistics() {
+  try {
+    var sheet = getSheet();
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0];
+    
+    if (data.length < 2) {
+      return createResponse(false, 'ไม่มีข้อมูลนักเรียน');
+    }
+    
+    var stats = {
+      totalStudents: data.length - 1,
+      levels: {},
+      shifts: {},
+      majors: {},
+      documentUploadCount: 0,
+      studentsWithCompleteDocs: 0,
+      recentUploads: []
+    };
+    
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var level = row[headers.indexOf('educationLevel')] || 'ไม่ระบุ';
+      var shift = row[headers.indexOf('shift')] || 'ไม่ระบุ';
+      var major = row[headers.indexOf('major')] || 'ไม่ระบุ';
+      
+      stats.levels[level] = (stats.levels[level] || 0) + 1;
+      stats.shifts[shift] = (stats.shifts[shift] || 0) + 1;
+      stats.majors[major] = (stats.majors[major] || 0) + 1;
+      
+      // ตรวจสอบเอกสาร
+      var uploadedCount = 0;
+      if (row[headers.indexOf('studentIdCard')]) uploadedCount++;
+      if (row[headers.indexOf('studentHouseReg')]) uploadedCount++;
+      
+      var studentId = row[headers.indexOf('studentId')];
+      var guardianData = getGuardianDocuments(studentId);
+      
+      if (guardianData.guardianIdCard.father.uploaded) uploadedCount++;
+      if (guardianData.guardianIdCard.mother.uploaded) uploadedCount++;
+      if (guardianData.guardianIdCard.other.uploaded) uploadedCount++;
+      if (guardianData.guardianHouseReg.father.uploaded) uploadedCount++;
+      if (guardianData.guardianHouseReg.mother.uploaded) uploadedCount++;
+      if (guardianData.guardianHouseReg.other.uploaded) uploadedCount++;
+      
+      stats.documentUploadCount += uploadedCount;
+      
+      if (uploadedCount === 8) {
+        stats.studentsWithCompleteDocs++;
+      }
+    }
+    
+    return createResponse(true, 'สถิติระบบ', stats);
+  } catch (error) {
+    Logger.log('Error getting statistics: ' + error.toString());
+    return createResponse(false, 'Error getting statistics: ' + error.toString());
+  }
+}
+
+// ==================== DATA IMPORT/EXPORT ====================
+
+// ฟังก์ชันนำเข้าข้อมูลจาก Excel
+function importStudentsFromExcel(students) {
+  try {
+    if (!students || !students.length) {
+      return createResponse(false, 'ไม่พบข้อมูลที่จะนำเข้า');
+    }
+    
+    var sheet = getSheet();
+    if (!sheet) {
+      return createResponse(false, 'ไม่พบ Google Sheet');
+    }
+    
+    ensureColumnsExist();
+    
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var existingData = sheet.getDataRange().getValues();
+    var existingIds = [];
+    
+    for (var i = 1; i < existingData.length; i++) {
+      existingIds.push(existingData[i][headers.indexOf('studentId')].toString());
+    }
+    
+    var imported = 0;
+    var skipped = 0;
+    var duplicates = [];
+    
+    for (var j = 0; j < students.length; j++) {
+      var student = students[j];
+      
+      if (existingIds.indexOf(student.id) !== -1) {
+        skipped++;
+        duplicates.push(student.id);
+        continue;
+      }
+      
+      var newRow = new Array(headers.length).fill('');
+      
+      newRow[headers.indexOf('studentId')] = student.id.toString().trim();
+      newRow[headers.indexOf('studentName')] = student.name.toString().trim();
+      newRow[headers.indexOf('educationLevel')] = student.level.toString().trim();
+      newRow[headers.indexOf('major')] = student.major.toString().trim();
+      newRow[headers.indexOf('class')] = (student.class || '').toString().trim();
+      newRow[headers.indexOf('shift')] = (student.shift || '').toString().trim();
+      
+      // ค่าเริ่มต้นสำหรับเอกสาร
+      newRow[headers.indexOf('studentIdCard')] = '';
+      newRow[headers.indexOf('studentHouseReg')] = '';
+      
+      var guardianIdCardIndex = headers.indexOf('guardianIdCardData');
+      if (guardianIdCardIndex !== -1) {
+        newRow[guardianIdCardIndex] = '{"father":{"uploaded":false,"fileName":""},"mother":{"uploaded":false,"fileName":""},"other":{"uploaded":false,"fileName":""}}';
+      }
+      
+      var guardianHouseRegIndex = headers.indexOf('guardianHouseRegData');
+      if (guardianHouseRegIndex !== -1) {
+        newRow[guardianHouseRegIndex] = '{"father":{"uploaded":false,"fileName":""},"mother":{"uploaded":false,"fileName":""},"other":{"uploaded":false,"fileName":""}}';
+      }
+      
+      var createdAtIndex = headers.indexOf('createdAt');
+      if (createdAtIndex !== -1) {
+        newRow[createdAtIndex] = new Date().toISOString();
+      }
+      
+      var updatedAtIndex = headers.indexOf('updatedAt');
+      if (updatedAtIndex !== -1) {
+        newRow[updatedAtIndex] = new Date().toISOString();
+      }
+      
+      sheet.appendRow(newRow);
+      imported++;
+    }
+    
+    SpreadsheetApp.flush();
+    
+    var message = 'นำเข้าข้อมูลสำเร็จ ' + imported + ' รายการ';
+    if (skipped > 0) {
+      message += ' (ข้าม ' + skipped + ' รายการเนื่องจากมีข้อมูลอยู่แล้ว)';
+    }
+    
+    return createResponse(true, message, {
+      imported: imported,
+      skipped: skipped,
+      duplicates: duplicates
+    });
+    
+  } catch (error) {
+    Logger.log('Error importing students: ' + error.toString());
+    return createResponse(false, 'เกิดข้อผิดพลาดในการนำเข้าข้อมูล: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันนำเข้าข้อมูลตัวอย่าง
+function importSampleData() {
+  try {
+    var sampleStudents = [
+      { id: '26737', name: 'นายธนะชัย บำรุงราษฏร์', level: 'ปวช.1', major: 'ช่างไฟฟ้า', class: 'ปวช.ช่างไฟฟ้า', shift: 'เช้า' },
+      { id: '26767', name: 'นายไพสิฐ สุนทรเทพวรากุล', level: 'ปวช.1', major: 'ช่างไฟฟ้า', class: 'ชฟ.1', shift: 'เช้า' },
+      { id: '26787', name: 'นายเพชรเกล้า ภูทองเทียม', level: 'ปวช.1', major: 'ช่างไฟฟ้า', class: 'ชฟ.1', shift: 'เช้า' }
+    ];
+    
+    return importStudentsFromExcel(sampleStudents);
+  } catch (error) {
+    Logger.log('Error importing sample data: ' + error.toString());
+    return createResponse(false, 'เกิดข้อผิดพลาดในการนำเข้าข้อมูลตัวอย่าง: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันส่งออกข้อมูล
+function exportData(format) {
+  try {
+    var sheet = getSheet();
+    var data = sheet.getDataRange().getValues();
+    
+    if (format === 'json') {
+      var headers = data[0];
+      var jsonData = [];
+      
+      for (var i = 1; i < data.length; i++) {
+        var row = {};
+        for (var j = 0; j < headers.length; j++) {
+          row[headers[j]] = data[i][j];
+        }
+        jsonData.push(row);
+      }
+      
+      return createResponse(true, 'Export successful', jsonData);
+    } else {
+      // สร้าง URL สำหรับ export
+      var url = 'https://docs.google.com/spreadsheets/d/' + SPREADSHEET_ID + '/export?format=xlsx';
+      return createResponse(true, 'Export URL', { url: url });
+    }
+  } catch (error) {
+    Logger.log('Error exporting data: ' + error.toString());
+    return createResponse(false, 'Error exporting data: ' + error.toString());
+  }
+}
+
+// ==================== AUTHENTICATION ====================
+
+// ฟังก์ชันเข้าสู่ระบบแอดมิน
+function adminLogin(data) {
+  try {
+    var username = data.username;
+    var password = data.password;
+    
+    if (!username || !password) {
+      return createResponse(false, 'Username and password required');
+    }
+    
+    // ตรวจสอบใน Properties Service
+    var scriptProperties = PropertiesService.getScriptProperties();
+    var adminUser = scriptProperties.getProperty('ADMIN_USERNAME');
+    var adminPass = scriptProperties.getProperty('ADMIN_PASSWORD');
+    
+    if (!adminUser) {
+      scriptProperties.setProperty('ADMIN_USERNAME', 'admin');
+      scriptProperties.setProperty('ADMIN_PASSWORD', 'admin452026');
+      adminUser = 'admin';
+      adminPass = 'admin452026';
+    }
+    
+    if (username === adminUser && password === adminPass) {
+      // สร้าง token
+      var token = Utilities.base64Encode(username + ':' + new Date().getTime());
+      scriptProperties.setProperty('ADMIN_TOKEN_' + token, username);
+      
+      return createResponse(true, 'Login successful', {
+        token: token,
+        username: username
+      });
+    } else {
+      return createResponse(false, 'Invalid username or password');
+    }
+  } catch (error) {
+    Logger.log('Error in adminLogin: ' + error.toString());
+    return createResponse(false, 'Login error: ' + error.toString());
+  }
+}
+
+// ==================== FILE SHARING MANAGEMENT ====================
+
+// ฟังก์ชันแก้ไขการตั้งค่า Sharing สำหรับไฟล์ทั้งหมด
+function fixAllFileSharing() {
+  try {
+    var folder = DriveApp.getFolderById(DOCUMENTS_FOLDER_ID);
+    var files = folder.getFiles();
+    var fixedCount = 0;
+    
+    while (files.hasNext()) {
+      var file = files.next();
+      
+      if (file.getSharingAccess() !== DriveApp.Access.ANYONE_WITH_LINK) {
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        fixedCount++;
+        Logger.log('Fixed sharing for: ' + file.getName());
+      }
+    }
+    
+    return createResponse(true, 'Fixed sharing for ' + fixedCount + ' files');
+  } catch (error) {
+    Logger.log('Error fixing file sharing: ' + error.toString());
+    return createResponse(false, 'Error fixing file sharing: ' + error.toString());
+  }
+}
+
+// ฟังก์ชันตรวจสอบสถานะ Sharing
+function checkFolderSharing() {
+  try {
+    var folder = DriveApp.getFolderById(DOCUMENTS_FOLDER_ID);
+    var folderAccess = folder.getSharingAccess();
+    var folderPermission = folder.getSharingPermission();
+    
+    var files = folder.getFiles();
+    var fileCount = 0;
+    var publicFiles = 0;
+    
+    while (files.hasNext()) {
+      var file = files.next();
+      fileCount++;
+      if (file.getSharingAccess() === DriveApp.Access.ANYONE_WITH_LINK) {
+        publicFiles++;
+      }
+    }
+    
+    return createResponse(true, 'Folder sharing status', {
+      folderAccess: folderAccess.toString(),
+      folderPermission: folderPermission.toString(),
+      totalFiles: fileCount,
+      publicFiles: publicFiles,
+      privateFiles: fileCount - publicFiles
+    });
+  } catch (error) {
+    return createResponse(false, 'Error checking folder: ' + error.toString());
+  }
+}
