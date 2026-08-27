@@ -66,6 +66,21 @@
 
                 <!-- Student Data -->
                 <div id="studentData" style="display: none;">
+                    <!-- Student Profile Toolbar -->
+                    <div class="student-profile-toolbar">
+                        <div class="profile-toolbar-title">
+                            <i class="fas fa-id-card-alt"></i> ข้อมูลนักศึกษา
+                        </div>
+                        <div class="profile-toolbar-actions">
+                            <button type="button" class="btn btn-outline btn-sm" id="copyDirectLinkBtn" title="คัดลอกลิงก์ตรงสำหรับเปิดหน้านี้">
+                                <i class="fas fa-link"></i> คัดลอกลิงก์ตรง
+                            </button>
+                            <button type="button" class="btn btn-primary btn-sm" id="showStudentQrBtn" title="สร้าง QR Code ประจำตัว">
+                                <i class="fas fa-qrcode"></i> QR Code
+                            </button>
+                        </div>
+                    </div>
+
                     <div class="student-info-grid" id="studentInfoGrid">
                         <div class="info-item"><div class="label">รหัสนักศึกษา</div><div class="value" id="studentId">-</div></div>
                         <div class="info-item"><div class="label">ชื่อ-สกุล</div><div class="value" id="studentName">-</div></div>
@@ -137,6 +152,10 @@
                 <div class="card">
                     <div class="admin-controls">
                         <button class="btn btn-warning" id="openConfigBtn"><i class="fas fa-database"></i> ตั้งค่าฐานข้อมูล & ดีพลอย</button>
+                        <button class="btn btn-warning" id="backupRestoreBtn"><i class="fas fa-save"></i> สำรอง & กู้คืนข้อมูล</button>
+                        <button class="btn btn-info" id="healthCheckBtn"><i class="fas fa-heartbeat"></i> ตรวจสุขภาพระบบ</button>
+                        <button class="btn btn-outline" id="auditLogsBtn"><i class="fas fa-history"></i> ประวัติกิจกรรม</button>
+                        <button class="btn btn-outline" id="changePassBtn"><i class="fas fa-key"></i> เปลี่ยนรหัสผ่าน</button>
                         <button class="btn btn-primary" id="addStudentBtn"><i class="fas fa-user-plus"></i> เพิ่มนักศึกษา</button>
                         <button class="btn btn-info" id="importFromExcelBtn"><i class="fas fa-file-import"></i> นำเข้า Excel</button>
                         <button class="btn btn-success" id="generateReportBtn"><i class="fas fa-chart-bar"></i> รายงาน</button>
@@ -436,6 +455,42 @@
         </div>
     </div>
 
+    <!-- Admin Document Management & Deletion Modal -->
+    <div class="modal" id="adminDocsModal">
+        <div class="modal-content" style="max-width:860px;">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fas fa-folder-open"></i> จัดการและลบเอกสารนักศึกษา</h3>
+                <button class="modal-close" id="closeAdminDocsModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Student Mini Info Card -->
+                <div class="admin-student-badge">
+                    <div class="student-avatar-icon"><i class="fas fa-user-graduate"></i></div>
+                    <div class="student-details">
+                        <h4 id="adminDocsStudentName">-</h4>
+                        <p>รหัสนักศึกษา: <strong id="adminDocsStudentId">-</strong> | ระดับ: <span id="adminDocsLevel">-</span> | สาขา: <span id="adminDocsMajor">-</span> | ชั้นเรียน: <span id="adminDocsClass">-</span> (<span id="adminDocsShift">-</span>)</p>
+                    </div>
+                    <div class="student-doc-summary">
+                        <span class="status-pill" id="adminDocsSummaryBadge">0/8 เอกสาร</span>
+                    </div>
+                </div>
+
+                <!-- 8 Documents Detailed List -->
+                <div class="admin-docs-list" id="adminDocsList">
+                    <div style="text-align:center; padding:30px; color:var(--text-muted);">กำลังโหลดข้อมูลเอกสาร...</div>
+                </div>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                <button type="button" class="btn btn-danger btn-sm" id="adminDeleteAllDocsBtn">
+                    <i class="fas fa-trash-alt"></i> ลบเอกสารทั้งหมดของนักศึกษาคนนี้
+                </button>
+                <button type="button" class="btn btn-outline btn-sm" id="closeAdminDocsModalBtn">
+                    <i class="fas fa-times"></i> ปิดหน้าต่าง
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Document View Modal -->
     <div class="modal" id="documentViewModal">
         <div class="modal-content" style="max-width:900px;">
@@ -565,6 +620,324 @@
                         <i class="fas fa-save"></i> บันทึกการตั้งค่า
                     </button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- System Health Check Modal -->
+    <div class="modal" id="healthCheckModal">
+        <div class="modal-content" style="max-width:880px;">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fas fa-heartbeat"></i> ตรวจสุขภาพระบบและไฟล์ (System Health Check & Repair)</h3>
+                <button class="modal-close" id="closeHealthCheckModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Health Score Overview Card -->
+                <div class="health-score-banner" id="healthScoreBanner">
+                    <div class="health-meter-circle" id="healthMeterCircle">
+                        <span class="score-val" id="healthScoreVal">--</span>
+                        <span class="score-lbl" id="healthScoreLbl">รอสแกน</span>
+                    </div>
+                    <div class="health-summary-text">
+                        <h4 id="healthStatusTitle">สถานะระบบ: รอการสแกน</h4>
+                        <p id="healthSummaryDesc">กดปุ่ม "สแกนทันที" เพื่อวิเคราะห์ความสมบูรณ์ของฐานข้อมูล Google Sheets, สิทธิ์ Google Drive และตรวจสอบไฟล์ตกค้าง</p>
+                    </div>
+                    <button class="btn btn-primary btn-sm" id="runHealthCheckBtn">
+                        <i class="fas fa-sync-alt"></i> สแกนทันที
+                    </button>
+                </div>
+
+                <!-- 4 Diagnostic Cards Grid -->
+                <div class="health-diag-grid">
+                    <div class="health-card" id="diagSheetCard">
+                        <div class="health-card-header">
+                            <span><i class="fas fa-table"></i> Google Sheets</span>
+                            <span class="badge badge-neutral" id="diagSheetBadge">ยังไม่ได้สแกน</span>
+                        </div>
+                        <div class="health-card-body">
+                            <div class="diag-item"><span>ชื่อแท็บ:</span> <strong id="diagSheetName">-</strong></div>
+                            <div class="diag-item"><span>จำนวนนักศึกษา:</span> <strong id="diagStudentCount">0 คน</strong></div>
+                            <div class="diag-item"><span>โครงสร้างคอลัมน์:</span> <strong id="diagColumnsStatus">-</strong></div>
+                        </div>
+                    </div>
+
+                    <div class="health-card" id="diagDriveCard">
+                        <div class="health-card-header">
+                            <span><i class="fab fa-google-drive"></i> Google Drive</span>
+                            <span class="badge badge-neutral" id="diagDriveBadge">ยังไม่ได้สแกน</span>
+                        </div>
+                        <div class="health-card-body">
+                            <div class="diag-item"><span>ชื่อโฟลเดอร์:</span> <strong id="diagFolderName">-</strong></div>
+                            <div class="diag-item"><span>ไฟล์ในไดรฟ์:</span> <strong id="diagTotalDriveFiles">0 ไฟล์</strong></div>
+                            <div class="diag-item"><span>สิทธิ์การแชร์:</span> <strong id="diagSharingStatus">-</strong></div>
+                        </div>
+                    </div>
+
+                    <div class="health-card" id="diagDocCard">
+                        <div class="health-card-header">
+                            <span><i class="fas fa-file-invoice"></i> ความสมบูรณ์เอกสาร</span>
+                            <span class="badge badge-neutral" id="diagDocBadge">ยังไม่ได้สแกน</span>
+                        </div>
+                        <div class="health-card-body">
+                            <div class="diag-item"><span>เอกสารในระบบ:</span> <strong id="diagTotalExpectedDocs">0 รายการ</strong></div>
+                            <div class="diag-item"><span>พบในไดรฟ์:</span> <strong id="diagFoundDriveFiles">0 ไฟล์</strong></div>
+                            <div class="diag-item"><span>ลิงก์สูญหาย:</span> <strong id="diagBrokenLinksCount">-</strong></div>
+                        </div>
+                    </div>
+
+                    <div class="health-card" id="diagOrphanCard">
+                        <div class="health-card-header">
+                            <span><i class="fas fa-broom"></i> ไฟล์ขยะตกค้าง</span>
+                            <span class="badge badge-neutral" id="diagOrphanBadge">ยังไม่ได้สแกน</span>
+                        </div>
+                        <div class="health-card-body">
+                            <div class="diag-item"><span>ไฟล์ไม่มีเจ้าของ:</span> <strong id="diagOrphansCount">0 ไฟล์</strong></div>
+                            <div class="diag-item"><span>สถานะความสะอาด:</span> <strong id="diagStorageStatus">-</strong></div>
+                            <div class="diag-item"><span>คำแนะนำ:</span> <span id="diagOrphanAdvice">-</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Issues / Action Required Section -->
+                <div class="health-issues-section" id="healthIssuesSection" style="display:none;">
+                    <h4><i class="fas fa-exclamation-triangle"></i> รายการปัญหาที่ตรวจพบ</h4>
+                    <div class="issues-list" id="healthIssuesList"></div>
+                </div>
+            </div>
+
+            <!-- Modal Footer with 1-Click Fix Actions -->
+            <div class="modal-footer" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <button type="button" class="btn btn-success btn-sm" id="autoRepairBtn" title="ซ่อมแซมสิทธิ์แชร์และล้างไฟล์ขยะอัตโนมัติ">
+                        <i class="fas fa-magic"></i> ซ่อมแซมระบบอัตโนมัติ (1-Click Fix)
+                    </button>
+                    <button type="button" class="btn btn-warning btn-sm" id="cleanOrphansBtn" title="ลบไฟล์ในไดรฟ์ที่ไม่มีรายชื่อในระบบ">
+                        <i class="fas fa-trash-alt"></i> ล้างไฟล์ขยะตกค้าง
+                    </button>
+                    <button type="button" class="btn btn-info btn-sm" id="fixSharingBtn" title="เปิดสิทธิ์แชร์โฟลเดอร์และไฟล์ทั้งหมดเป็นสาธารณะ">
+                        <i class="fas fa-lock-open"></i> แก้ไขสิทธิ์แชร์ไฟล์
+                    </button>
+                </div>
+                <button type="button" class="btn btn-outline btn-sm" id="closeHealthCheckModalBtn">
+                    <i class="fas fa-times"></i> ปิด
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Audit Trail / Activity Logs Modal -->
+    <div class="modal" id="auditLogsModal">
+        <div class="modal-content" style="max-width:940px;">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fas fa-history"></i> ประวัติกิจกรรมระบบ (Audit Trail Logs)</h3>
+                <button class="modal-close" id="closeAuditLogsModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Log Filters Bar -->
+                <div class="log-filters-bar">
+                    <div class="form-group" style="flex:2; min-width:180px; margin-bottom:0;">
+                        <input type="text" id="logSearchInput" class="form-control" placeholder="ค้นหากิจกรรม, รหัสนักศึกษา, ผู้ใช้..." />
+                    </div>
+                    <div class="form-group" style="flex:1; min-width:160px; margin-bottom:0;">
+                        <select id="logActionFilter" class="form-control">
+                            <option value="">ทุกประเภทกิจกรรม</option>
+                            <option value="ADD_STUDENT">เพิ่มนักศึกษา</option>
+                            <option value="UPDATE_STUDENT">แก้ไขนักศึกษา</option>
+                            <option value="DELETE_STUDENT">ลบนักศึกษา</option>
+                            <option value="BULK_DELETE">ลบเป็นกลุ่ม</option>
+                            <option value="UPLOAD_DOCUMENT">อัปโหลดเอกสาร</option>
+                            <option value="DELETE_DOCUMENT">ลบเอกสาร</option>
+                            <option value="ADMIN_LOGIN">เข้าสู่ระบบ</option>
+                            <option value="CHANGE_PASSWORD">เปลี่ยนรหัสผ่าน</option>
+                            <option value="SYSTEM_REPAIR">ซ่อมแซมระบบ</option>
+                            <option value="CONFIG">การตั้งค่า</option>
+                        </select>
+                    </div>
+                    <button type="button" class="btn btn-primary btn-sm" id="refreshLogsBtn">
+                        <i class="fas fa-sync-alt"></i> รีเฟรช
+                    </button>
+                    <button type="button" class="btn btn-danger btn-sm" id="clearLogsBtn" title="ล้างประวัติกิจกรรมทั้งหมด">
+                        <i class="fas fa-trash"></i> ล้างประวัติ
+                    </button>
+                </div>
+
+                <!-- Logs Table Wrap -->
+                <div class="table-wrap" style="max-height:50vh; overflow-y:auto; margin-top:14px;">
+                    <table class="data-table log-table">
+                        <thead>
+                            <tr>
+                                <th style="width:170px;">เวลา</th>
+                                <th style="width:160px;">กิจกรรม</th>
+                                <th>รายละเอียด</th>
+                                <th style="width:100px;">ผู้ใช้</th>
+                                <th style="width:95px;">สถานะ</th>
+                            </tr>
+                        </thead>
+                        <tbody id="auditLogsTableBody">
+                            <tr><td colspan="5" style="text-align:center; padding:30px; color:var(--text-muted);">กำลังโหลดประวัติกิจกรรม...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content:space-between; align-items:center;">
+                <button type="button" class="btn btn-outline btn-sm" id="exportLogsJsonBtn">
+                    <i class="fas fa-download"></i> ส่งออก Logs (JSON)
+                </button>
+                <button type="button" class="btn btn-outline btn-sm" id="closeAuditLogsModalBtn">
+                    <i class="fas fa-times"></i> ปิด
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Change Admin Password Modal -->
+    <div class="modal" id="changePasswordModal">
+        <div class="modal-content" style="max-width:480px;">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fas fa-key"></i> เปลี่ยนรหัสผ่านแอดมิน</h3>
+                <button class="modal-close" id="closeChangePassModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="changePasswordForm" onsubmit="return false;">
+                    <div class="form-group">
+                        <label for="oldPasswordInput">รหัสผ่านปัจจุบัน</label>
+                        <input type="password" id="oldPasswordInput" class="form-control" placeholder="กรอกรหัสผ่านเดิม" required />
+                    </div>
+                    <div class="form-group">
+                        <label for="newPasswordInput">รหัสผ่านใหม่ (อย่างน้อย 4 ตัวอักษร)</label>
+                        <input type="password" id="newPasswordInput" class="form-control" placeholder="กรอกรหัสผ่านใหม่" required />
+                    </div>
+                    <div class="form-group">
+                        <label for="confirmNewPasswordInput">ยืนยันรหัสผ่านใหม่</label>
+                        <input type="password" id="confirmNewPasswordInput" class="form-control" placeholder="กรอกรหัสผ่านใหม่อีกครั้ง" required />
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" id="closeChangePassBtn">ยกเลิก</button>
+                <button type="button" class="btn btn-primary" id="saveNewPasswordBtn">
+                    <i class="fas fa-save"></i> บันทึกรหัสผ่านใหม่
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Database Backup & Restore Modal -->
+    <div class="modal" id="backupRestoreModal">
+        <div class="modal-content" style="max-width:860px;">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fas fa-save"></i> สำรองและกู้คืนฐานข้อมูล (Database Snapshot & Restore)</h3>
+                <button class="modal-close" id="closeBackupRestoreModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Backup Snapshot Creator Banner -->
+                <div class="backup-banner">
+                    <div class="backup-banner-icon"><i class="fas fa-camera-retro"></i></div>
+                    <div class="backup-banner-text">
+                        <h4>สร้างจุดสำรองข้อมูล Snapshot ใน 1 วินาที</h4>
+                        <p>ระบบจะสร้างแท็บสำเนาตาราง <code>Backup_YYYYMMDD_HHmm</code> เก็บไว้ใน Google Sheets โดยตรง ปลอดภัย สามารถกู้คืนกลับมาได้ตลอดเวลา</p>
+                    </div>
+                    <button type="button" class="btn btn-primary btn-sm" id="createSnapshotBtn">
+                        <i class="fas fa-plus-circle"></i> สร้าง Snapshot เดี๋ยวนี้
+                    </button>
+                </div>
+
+                <!-- Existing Backups List -->
+                <div style="margin: 22px 0 10px; display:flex; justify-content:space-between; align-items:center;">
+                    <h4 style="color:var(--secondary); font-size:1rem; font-weight:700;">
+                        <i class="fas fa-history"></i> รายการจุดสำรองข้อมูลใน Google Sheets
+                    </h4>
+                    <button type="button" class="btn btn-outline btn-xs" id="refreshBackupsBtn">
+                        <i class="fas fa-sync-alt"></i> รีเฟรชรายการ
+                    </button>
+                </div>
+                <div class="table-wrap" style="max-height:35vh; overflow-y:auto;">
+                    <table class="data-table backup-table">
+                        <thead>
+                            <tr>
+                                <th>ชื่อแท็บ Snapshot</th>
+                                <th style="width:140px;">จำนวนนักศึกษา</th>
+                                <th style="width:160px;">การจัดการ</th>
+                            </tr>
+                        </thead>
+                        <tbody id="backupListTableBody">
+                            <tr><td colspan="3" style="text-align:center; padding:25px; color:var(--text-muted);">กำลังโหลดรายการจุดสำรองข้อมูล...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- JSON Backup & Restore section -->
+                <div class="json-backup-section">
+                    <div class="json-box">
+                        <h5><i class="fas fa-file-download"></i> ส่งออกไฟล์สำรอง (JSON)</h5>
+                        <p>ดาวน์โหลดข้อมูลนักศึกษาทั้งหมดเก็บไว้ในคอมพิวเตอร์ของคุณเป็นไฟล์ .json</p>
+                        <button type="button" class="btn btn-outline btn-sm" id="downloadFullJsonBackupBtn">
+                            <i class="fas fa-download"></i> ดาวน์โหลด Backup JSON
+                        </button>
+                    </div>
+                    <div class="json-box">
+                        <h5><i class="fas fa-file-upload"></i> กู้คืนจากไฟล์ JSON สำรอง</h5>
+                        <p>เลือกไฟล์ .json ที่เคยสำรองไว้เพื่อนำเข้าและกู้คืนข้อมูลนักศึกษาทั้งหมด</p>
+                        <input type="file" id="restoreJsonFileInput" accept=".json" style="display:none;" />
+                        <button type="button" class="btn btn-warning btn-sm" id="selectRestoreJsonFileBtn">
+                            <i class="fas fa-upload"></i> เลือกไฟล์ JSON เพื่อกู้คืน
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline btn-sm" id="closeBackupRestoreModalBtn">
+                    <i class="fas fa-times"></i> ปิด
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Student QR Code & Direct Link Modal -->
+    <div class="modal" id="qrCodeModal">
+        <div class="modal-content" style="max-width:520px; text-align:center;">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fas fa-qrcode"></i> QR Code & ลิงก์ตรงประจำตัวนักศึกษา</h3>
+                <button class="modal-close" id="closeQrCodeModal">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:24px 20px;">
+                <!-- Student Card Preview -->
+                <div class="qr-student-header">
+                    <h4 id="qrStudentName">-</h4>
+                    <p>รหัสนักศึกษา: <strong id="qrStudentId">-</strong> | <span id="qrStudentMajor">-</span> (<span id="qrStudentLevel">-</span>)</p>
+                </div>
+
+                <!-- QR Code Box -->
+                <div class="qr-canvas-container" id="qrContainer">
+                    <img id="qrImageElement" src="" alt="Student QR Code" style="max-width:240px; height:auto; border-radius:var(--radius-sm); box-shadow:var(--shadow-md); margin:0 auto; display:block;" />
+                </div>
+                <p style="font-size:0.82rem; color:var(--text-muted); margin-top:10px;">
+                    <i class="fas fa-camera"></i> สแกนด้วยกล้องมือถือเพื่อเปิดหน้ารายการเอกสารของนักศึกษาทันที
+                </p>
+
+                <!-- Direct Link Input Box -->
+                <div class="qr-link-box">
+                    <label for="qrDirectLinkInput" style="font-size:0.8rem; font-weight:600; color:var(--text-secondary); display:block; text-align:left; margin-bottom:4px;">ลิงก์ตรงสำหรับเปิดดูเอกสาร:</label>
+                    <div style="display:flex; gap:8px;">
+                        <input type="text" id="qrDirectLinkInput" class="form-control" readonly style="font-size:0.82rem; background:#f8fafc;" />
+                        <button type="button" class="btn btn-outline btn-sm" id="copyQrLinkBtn" title="คัดลอกลิงก์">
+                            <i class="fas fa-copy"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                <div style="display:flex; gap:8px;">
+                    <button type="button" class="btn btn-success btn-sm" id="downloadQrPngBtn">
+                        <i class="fas fa-download"></i> ดาวน์โหลด QR (PNG)
+                    </button>
+                    <button type="button" class="btn btn-info btn-sm" id="printQrCardBtn">
+                        <i class="fas fa-print"></i> พิมพ์ป้าย QR Code
+                    </button>
+                </div>
+                <button type="button" class="btn btn-outline btn-sm" id="closeQrCodeModalBtn">
+                    <i class="fas fa-times"></i> ปิด
+                </button>
             </div>
         </div>
     </div>
