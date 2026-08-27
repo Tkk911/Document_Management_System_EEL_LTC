@@ -10,7 +10,7 @@ let isAdminLoggedIn = false;
 
 // ค่าคอนฟิกเริ่มต้นของระบบ (Default Configuration)
 const DEFAULT_CONFIG = {
-    scriptUrl: 'https://script.google.com/macros/s/AKfycbxkqJii0ooFwFt-dDKEECo-JCQfxQ1wCtflnq-kIGRCnszXsYxHQ-V2NkARadI1V2biag/exec',
+    scriptUrl: 'https://script.google.com/macros/s/AKfycbwAsjXjrMlNw-MSc860oZ9FgofZhKVhGmriQm-j5hpOGVeyV1Se5fARFSXfOYR7zYImzA/exec',
     spreadsheetId: '1kt0l2eKCbKvYvtLtnhDAleolzpxFB4fos6ZNQ87bDB0',
     documentsFolderId: '12CwpLW7vAf1492osJZSraprBJFaH9ItV',
     sheetName: 'Students'
@@ -233,10 +233,74 @@ function fileToBase64(file) {
     });
 }
 
+function compressImageFile(file, maxWidth = 1600, maxHeight = 1600, quality = 0.82) {
+    return new Promise((resolve, reject) => {
+        if (!file.type.startsWith('image/')) {
+            // ไฟล์ที่ไม่ใช่รูปภาพ (เช่น PDF) -> แปลงเป็น Base64 โดยตรง
+            fileToBase64(file).then(base64 => {
+                resolve({
+                    base64: base64,
+                    contentType: file.type,
+                    originalSize: file.size,
+                    compressedSize: file.size,
+                    isImage: false,
+                    reduction: 0
+                });
+            }).catch(reject);
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = (event) => {
+            const img = new Image();
+            img.src = event.target.result;
+            img.onload = () => {
+                let width = img.width;
+                let height = img.height;
+
+                // คำนวณสัดส่วนรูปภาพให้พอดีกับ maxWidth x maxHeight
+                if (width > maxWidth || height > maxHeight) {
+                    if (width / height > maxWidth / maxHeight) {
+                        height = Math.round((height * maxWidth) / width);
+                        width = maxWidth;
+                    } else {
+                        width = Math.round((width * maxHeight) / height);
+                        height = maxHeight;
+                    }
+                }
+
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+
+                // ส่งออกเป็น JPEG คุณภาพสูงแต่ขนาดไฟล์เล็กลงมาก
+                const dataUrl = canvas.toDataURL('image/jpeg', quality);
+                const base64 = dataUrl.split(',')[1];
+                const compressedSize = Math.round((base64.length * 3) / 4);
+
+                resolve({
+                    base64: base64,
+                    contentType: 'image/jpeg',
+                    originalSize: file.size,
+                    compressedSize: compressedSize,
+                    isImage: true,
+                    reduction: Math.max(0, Math.round(((file.size - compressedSize) / file.size) * 100))
+                });
+            };
+            img.onerror = (err) => reject(err);
+        };
+        reader.onerror = (err) => reject(err);
+    });
+}
+
 function clearFileSelection() {
     document.getElementById('fileInput').value = '';
     document.getElementById('filePreview').style.display = 'none';
     selectedFile = null;
+    preparedUploadData = null;
 }
 
 function getSampleStudents() {
@@ -577,6 +641,7 @@ function displayStudent(data) {
                     <div class="doc-card-footer">
                         <button class="btn btn-primary btn-sm" onclick="viewDocument('${docType}','${guardian || ''}')"><i class="fas fa-eye"></i> ดู</button>
                         <button class="btn btn-success btn-sm" onclick="openUploadModal('${docType}','${guardian || ''}')"><i class="fas fa-upload"></i> อัปโหลด</button>
+                        ${uploaded ? `<button class="btn btn-danger btn-sm" onclick="deleteDocumentDirect('${data.studentId}','${docType}','${guardian || ''}')" title="ลบเอกสารนี้"><i class="fas fa-trash"></i> ลบ</button>` : ''}
                     </div>
                 </div>
             `;
@@ -604,6 +669,8 @@ function displayStudent(data) {
 // ============================================================
 //  UPLOAD
 // ============================================================
+let preparedUploadData = null;
+
 function openUploadModal(docType, guardian = null) {
     if (!currentStudentId) return showAlert('error', 'กรุณาค้นหานักศึกษาก่อน');
     currentDocumentType = docType;
@@ -620,23 +687,42 @@ function openUploadModal(docType, guardian = null) {
     document.getElementById('fileInput').value = '';
     document.getElementById('filePreview').style.display = 'none';
     selectedFile = null;
+    preparedUploadData = null;
     document.getElementById('uploadModal').classList.add('active');
 }
 
 function closeUploadModal() {
     document.getElementById('uploadModal').classList.remove('active');
+    preparedUploadData = null;
 }
 
-function handleFileSelect(e) {
+async function handleFileSelect(e) {
     const file = e.target.files[0];
     if (!file) return;
-    const valid = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
-    if (!valid.includes(file.type)) return showAlert('error', 'กรุณาเลือก PDF หรือรูปภาพ');
-    if (file.size > 5 * 1024 * 1024) return showAlert('error', 'ไฟล์ต้องไม่เกิน 5MB');
+    const valid = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!valid.includes(file.type)) return showAlert('error', 'กรุณาเลือก PDF หรือรูปภาพ (JPG, PNG, WebP)');
+    if (file.size > 25 * 1024 * 1024) return showAlert('error', 'ขนาดไฟล์ต้นฉบับต้องไม่เกิน 25MB');
+    
     selectedFile = file;
-    document.getElementById('fileName').textContent = `${file.name} (${formatFileSize(file.size)})`;
+    const fileNameEl = document.getElementById('fileName');
+    fileNameEl.innerHTML = `<i class="fas fa-file"></i> ${file.name} (${formatFileSize(file.size)}) <span style="color:var(--primary);"><i class="fas fa-spinner fa-spin"></i> กำลังเตรียมไฟล์...</span>`;
     document.getElementById('filePreview').style.display = 'block';
-    showAlert('success', 'เลือกไฟล์: ' + file.name);
+
+    try {
+        const comp = await compressImageFile(file);
+        preparedUploadData = comp;
+        
+        let badgeHtml = '';
+        if (comp.isImage && comp.reduction > 0) {
+            badgeHtml = `<br/><span class="compression-badge"><i class="fas fa-bolt"></i> บีบอัดอัตโนมัติ: ${formatFileSize(comp.originalSize)} ➔ ${formatFileSize(comp.compressedSize)} (ลดลง ${comp.reduction}%)</span>`;
+        }
+        fileNameEl.innerHTML = `<i class="fas fa-file-check" style="color:var(--success);"></i> ${file.name} ${badgeHtml}`;
+        showAlert('success', 'เลือกไฟล์พร้อมอัปโหลด: ' + file.name);
+    } catch (err) {
+        preparedUploadData = null;
+        fileNameEl.textContent = `${file.name} (${formatFileSize(file.size)})`;
+        showAlert('warning', 'พร้อมอัปโหลดไฟล์ต้นฉบับ');
+    }
 }
 
 async function confirmUpload() {
@@ -644,14 +730,16 @@ async function confirmUpload() {
     if (!currentStudentId) return showAlert('error', 'ไม่พบรหัสนักศึกษา');
     try {
         showLoading(true);
-        const base64 = await fileToBase64(selectedFile);
+        let base64 = preparedUploadData ? preparedUploadData.base64 : await fileToBase64(selectedFile);
+        let contentType = preparedUploadData ? preparedUploadData.contentType : selectedFile.type;
+        
         const payload = {
             action: 'uploadDocument',
             studentId: currentStudentId,
             documentType: currentDocumentType,
             filename: selectedFile.name,
             fileData: base64,
-            contentType: selectedFile.type
+            contentType: contentType
         };
         if (currentDocumentType === 'guardianIdCard' || currentDocumentType === 'guardianHouseReg') {
             payload.guardianType = document.getElementById('modalGuardianType').value;
@@ -659,11 +747,12 @@ async function confirmUpload() {
         const result = await callAPI(SCRIPT_URL, { method: 'POST', body: payload });
         if (result.success) {
             closeUploadModal();
-            showAlert('success', 'อัปโหลดสำเร็จ');
+            showAlert('success', '✅ อัปโหลดเอกสารสำเร็จ (ความเร็วสูง & ซิงค์เรียลไทม์)');
             // ล้าง cache แล้ว reload ข้อมูลที่แสดงอยู่
             cache.delete('search_' + currentStudentId);
+            StorageCache.delete('dashboard_data');
+            
             if (currentMode === 'visitor' && currentStudentId) {
-                // ค้นหาใหม่ด้วย currentStudentId โดยตรง (ไม่ผ่าน input field)
                 try {
                     const refreshResult = await callAPI(
                         `${SCRIPT_URL}?action=searchStudent&query=${encodeURIComponent(currentStudentId)}`
@@ -672,11 +761,12 @@ async function confirmUpload() {
                         displayStudent(refreshResult.data);
                         document.getElementById('studentData').style.display = 'block';
                     }
-                } catch (e) { /* ข้ามถ้า refresh ไม่ได้ */ }
+                } catch (e) { }
             }
             if (currentMode === 'admin') {
                 cache.delete('all_students');
                 await loadStudentsTable();
+                await loadStatistics();
             }
         } else {
             showAlert('error', result.message || 'อัปโหลดล้มเหลว');
@@ -759,6 +849,237 @@ async function deleteCurrentDocument() {
 }
 
 // ============================================================
+//  ADMIN DOCUMENT MANAGEMENT & DELETION MODAL
+// ============================================================
+let adminCurrentDocsStudent = null;
+
+const ALL_DOC_CONFIGS = [
+    { docType: 'studentIdCard', guardian: null, label: 'สำเนาบัตรประชาชนนักศึกษา', icon: 'fa-id-card' },
+    { docType: 'studentHouseReg', guardian: null, label: 'สำเนาทะเบียนบ้านนักศึกษา', icon: 'fa-home' },
+    { docType: 'guardianIdCard', guardian: 'father', label: 'สำเนาบัตรประชาชนผู้ปกครอง (พ่อ)', icon: 'fa-male' },
+    { docType: 'guardianHouseReg', guardian: 'father', label: 'สำเนาทะเบียนบ้านผู้ปกครอง (พ่อ)', icon: 'fa-house-user' },
+    { docType: 'guardianIdCard', guardian: 'mother', label: 'สำเนาบัตรประชาชนผู้ปกครอง (แม่)', icon: 'fa-female' },
+    { docType: 'guardianHouseReg', guardian: 'mother', label: 'สำเนาทะเบียนบ้านผู้ปกครอง (แม่)', icon: 'fa-house-user' },
+    { docType: 'guardianIdCard', guardian: 'other', label: 'สำเนาบัตรประชาชนผู้ปกครองอื่น', icon: 'fa-user-tie' },
+    { docType: 'guardianHouseReg', guardian: 'other', label: 'สำเนาทะเบียนบ้านผู้ปกครองอื่น', icon: 'fa-house-user' }
+];
+
+async function openAdminDocsModal(studentId) {
+    if (!studentId) return;
+    try {
+        showLoading(true);
+        currentStudentId = studentId;
+        
+        let student = allStudents.find(s => s.id === studentId);
+        const result = await callAPI(`${SCRIPT_URL}?action=getStudent&studentId=${encodeURIComponent(studentId)}`);
+        if (result && result.success && result.data) {
+            student = result.data;
+        }
+
+        if (!student) {
+            showAlert('error', 'ไม่พบข้อมูลนักศึกษา: ' + studentId);
+            return;
+        }
+
+        adminCurrentDocsStudent = student;
+
+        document.getElementById('adminDocsStudentName').textContent = student.name || student.studentName || '-';
+        document.getElementById('adminDocsStudentId').textContent = student.id || student.studentId || '-';
+        document.getElementById('adminDocsLevel').textContent = student.level || student.educationLevel || '-';
+        document.getElementById('adminDocsMajor').textContent = student.major || '-';
+        document.getElementById('adminDocsClass').textContent = student.class || '-';
+        document.getElementById('adminDocsShift').textContent = student.shift || '-';
+
+        renderAdminDocsList(student);
+        document.getElementById('adminDocsModal').classList.add('active');
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาด: ' + err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+function closeAdminDocsModal() {
+    const modal = document.getElementById('adminDocsModal');
+    if (modal) modal.classList.remove('active');
+    adminCurrentDocsStudent = null;
+}
+
+function renderAdminDocsList(student) {
+    const listContainer = document.getElementById('adminDocsList');
+    if (!listContainer) return;
+
+    const docs = student.documents || {};
+    let uploadedCount = 0;
+
+    let html = ALL_DOC_CONFIGS.map(cfg => {
+        let doc = docs[cfg.docType];
+        if (cfg.guardian && docs[cfg.docType] && docs[cfg.docType][cfg.guardian]) {
+            doc = docs[cfg.docType][cfg.guardian];
+        } else if (cfg.guardian) {
+            doc = null;
+        }
+
+        const uploaded = !!(doc && doc.uploaded);
+        if (uploaded) uploadedCount++;
+        const fileName = doc?.fileName || '';
+
+        return `
+            <div class="admin-doc-item ${uploaded ? 'is-uploaded' : 'is-missing'}">
+                <div class="admin-doc-info">
+                    <div class="admin-doc-icon"><i class="fas ${cfg.icon}"></i></div>
+                    <div class="admin-doc-text">
+                        <div class="admin-doc-title">${cfg.label}</div>
+                        <div class="admin-doc-filename">
+                            ${uploaded 
+                                ? `<span style="color:var(--success); font-weight:600;"><i class="fas fa-check-circle"></i> อัปโหลดแล้ว</span> ${fileName ? `• ${fileName}` : ''}` 
+                                : `<span style="color:var(--text-muted);"><i class="fas fa-circle"></i> ยังไม่ได้อัปโหลด</span>`
+                            }
+                        </div>
+                    </div>
+                </div>
+                <div class="admin-doc-actions">
+                    ${uploaded ? `
+                        <button type="button" class="btn btn-info btn-xs" onclick="viewDocument('${cfg.docType}','${cfg.guardian || ''}')" title="ดูเอกสาร">
+                            <i class="fas fa-eye"></i> ดู
+                        </button>
+                        <button type="button" class="btn btn-danger btn-xs" onclick="deleteDocumentFromAdminModal('${cfg.docType}','${cfg.guardian || ''}')" title="ลบเอกสารนี้">
+                            <i class="fas fa-trash"></i> ลบ
+                        </button>
+                    ` : `
+                        <button type="button" class="btn btn-success btn-xs" onclick="openUploadModal('${cfg.docType}','${cfg.guardian || ''}')" title="อัปโหลดเอกสาร">
+                            <i class="fas fa-upload"></i> อัปโหลด
+                        </button>
+                    `}
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    listContainer.innerHTML = html;
+
+    const summaryBadge = document.getElementById('adminDocsSummaryBadge');
+    if (summaryBadge) {
+        summaryBadge.textContent = `${uploadedCount}/8 เอกสาร`;
+        summaryBadge.className = `status-pill ${uploadedCount === 8 ? 'uploaded' : 'missing'}`;
+    }
+}
+
+async function deleteDocumentDirect(studentId, docType, guardianType) {
+    if (!studentId || !docType) return;
+    const docName = getDocTypeName(docType, guardianType);
+    if (!confirm(`คุณต้องการลบ "${docName}" ของนักศึกษารหัส ${studentId} ใช่หรือไม่?`)) return;
+
+    try {
+        showLoading(true);
+        const result = await callAPI(SCRIPT_URL, {
+            method: 'POST',
+            body: {
+                action: 'deleteDocument',
+                studentId: studentId,
+                documentType: docType,
+                guardianType: guardianType || null
+            }
+        });
+        if (result && result.success) {
+            showAlert('success', `✅ ลบ ${docName} เรียบร้อยแล้ว`);
+            cache.delete('search_' + studentId);
+            StorageCache.delete('dashboard_data');
+            
+            // Re-render visitor view if matching current student
+            if (currentStudentId === studentId && currentMode === 'visitor') {
+                await searchStudent();
+            }
+            await loadDashboardData(true, true);
+        } else {
+            showAlert('error', result?.message || 'ลบเอกสารไม่สำเร็จ');
+        }
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาด: ' + err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+async function deleteDocumentFromAdminModal(docType, guardianType) {
+    if (!adminCurrentDocsStudent) return;
+    const studentId = adminCurrentDocsStudent.id || adminCurrentDocsStudent.studentId;
+    const docName = getDocTypeName(docType, guardianType);
+    if (!confirm(`คุณต้องการลบ "${docName}" ใช่หรือไม่?`)) return;
+
+    try {
+        showLoading(true);
+        const result = await callAPI(SCRIPT_URL, {
+            method: 'POST',
+            body: {
+                action: 'deleteDocument',
+                studentId: studentId,
+                documentType: docType,
+                guardianType: guardianType || null
+            }
+        });
+        if (result && result.success) {
+            showAlert('success', `✅ ลบ ${docName} เรียบร้อยแล้ว`);
+            cache.delete('search_' + studentId);
+            StorageCache.delete('dashboard_data');
+            
+            // Reload updated student data into modal
+            const freshRes = await callAPI(`${SCRIPT_URL}?action=getStudent&studentId=${studentId}`);
+            if (freshRes && freshRes.success && freshRes.data) {
+                adminCurrentDocsStudent = freshRes.data;
+                renderAdminDocsList(adminCurrentDocsStudent);
+            }
+            
+            loadDashboardData(true, true).catch(() => {});
+        } else {
+            showAlert('error', result?.message || 'ลบเอกสารไม่สำเร็จ');
+        }
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาด: ' + err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+async function adminDeleteAllDocs() {
+    if (!adminCurrentDocsStudent) return;
+    const studentId = adminCurrentDocsStudent.id || adminCurrentDocsStudent.studentId;
+    const studentName = adminCurrentDocsStudent.name || adminCurrentDocsStudent.studentName || '';
+    if (!confirm(`⚠️ ยืนยันการลบเอกสารทั้งหมด (ทั้ง 8 รายการ) ของ "${studentName}" (รหัส: ${studentId}) ใช่หรือไม่?\n\nการกระทำนี้จะลบไฟล์ออกจาก Google Drive ด้วย`)) return;
+
+    try {
+        showLoading(true);
+        const result = await callAPI(SCRIPT_URL, {
+            method: 'POST',
+            body: {
+                action: 'deleteAllStudentDocuments',
+                studentId: studentId
+            }
+        });
+        if (result && result.success) {
+            showAlert('success', `✅ ลบเอกสารทั้งหมดของรหัส ${studentId} เรียบร้อยแล้ว`);
+            cache.delete('search_' + studentId);
+            StorageCache.delete('dashboard_data');
+            
+            // Reload updated student data into modal
+            const freshRes = await callAPI(`${SCRIPT_URL}?action=getStudent&studentId=${studentId}`);
+            if (freshRes && freshRes.success && freshRes.data) {
+                adminCurrentDocsStudent = freshRes.data;
+                renderAdminDocsList(adminCurrentDocsStudent);
+            }
+            
+            loadDashboardData(true, true).catch(() => {});
+        } else {
+            showAlert('error', result?.message || 'ลบเอกสารไม่สำเร็จ');
+        }
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาด: ' + err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+// ============================================================
 //  ADMIN LOGIN
 // ============================================================
 async function adminLogin() {
@@ -798,6 +1119,636 @@ function adminLogout() {
     document.getElementById('adminPanel').style.display = 'none';
     document.getElementById('reportSection').style.display = 'none';
     showAlert('success', 'ออกจากระบบแล้ว');
+}
+
+// ============================================================
+//  SYSTEM HEALTH CHECK & AUTO-REPAIR
+// ============================================================
+
+function openHealthCheckModal() {
+    document.getElementById('healthCheckModal').classList.add('active');
+    runSystemHealthCheck();
+}
+
+function closeHealthCheckModal() {
+    document.getElementById('healthCheckModal').classList.remove('active');
+}
+
+async function runSystemHealthCheck() {
+    const scoreCircle = document.getElementById('healthMeterCircle');
+    const scoreVal = document.getElementById('healthScoreVal');
+    const scoreLbl = document.getElementById('healthScoreLbl');
+    const title = document.getElementById('healthStatusTitle');
+    const desc = document.getElementById('healthSummaryDesc');
+    
+    scoreVal.innerHTML = '<i class="fas fa-spinner fa-spin" style="font-size:1rem;"></i>';
+    scoreLbl.textContent = 'กำลังสแกน';
+    title.textContent = 'สถานะระบบ: กำลังสแกนวิเคราะห์...';
+    desc.textContent = 'กำลังตรวจสอบการเชื่อมต่อ Google Sheets, สิทธิ์ Google Drive, ความสมบูรณ์ของเอกสาร และตรวจจับไฟล์ขยะ';
+
+    try {
+        const result = await callAPI(`${SCRIPT_URL}?action=performHealthCheck`);
+        if (result && result.success && result.data) {
+            const data = result.data;
+            const score = data.healthScore !== undefined ? data.healthScore : 100;
+            scoreVal.textContent = score + '%';
+            
+            scoreCircle.className = 'health-meter-circle';
+            if (score >= 90) {
+                scoreLbl.textContent = 'ยอดเยี่ยม';
+                title.textContent = 'สถานะระบบ: ยอดเยี่ยม (EXCELLENT)';
+                desc.textContent = 'ระบบทำงานปกติ ฐานข้อมูลและไฟล์เชื่อมต่อสมบูรณ์ พร้อมใช้งาน 100%';
+            } else if (score >= 70) {
+                scoreCircle.classList.add('warning');
+                scoreLbl.textContent = 'ดี';
+                title.textContent = 'สถานะระบบ: ดี (GOOD)';
+                desc.textContent = 'ระบบสามารถทำงานได้ แต่พบคำแนะนำหรือไฟล์ที่ควรได้รับการดูแล';
+            } else {
+                scoreCircle.classList.add('critical');
+                scoreLbl.textContent = 'ควรปรับปรุง';
+                title.textContent = 'สถานะระบบ: พบปัญหา (ATTENTION NEEDED)';
+                desc.textContent = 'พบข้อผิดพลาดหรือลิงก์ไฟล์สูญหาย กรุณากดปุ่มซ่อมแซมระบบด้านล่าง';
+            }
+
+            // Sheet card
+            document.getElementById('diagSheetName').textContent = data.spreadsheet.name || '-';
+            document.getElementById('diagStudentCount').textContent = (data.spreadsheet.totalStudents || 0) + ' คน';
+            document.getElementById('diagColumnsStatus').innerHTML = data.spreadsheet.columnsValid 
+                ? '<span style="color:var(--success);"><i class="fas fa-check-circle"></i> ครบถ้วน</span>' 
+                : '<span style="color:var(--danger);"><i class="fas fa-times-circle"></i> ไม่ครบ</span>';
+            const sheetBadge = document.getElementById('diagSheetBadge');
+            sheetBadge.textContent = data.spreadsheet.connected ? 'เชื่อมต่อแล้ว' : 'ไม่พบ';
+            sheetBadge.className = data.spreadsheet.connected ? 'badge badge-success' : 'badge badge-danger';
+
+            // Drive card
+            document.getElementById('diagFolderName').textContent = data.drive.name || '-';
+            document.getElementById('diagTotalDriveFiles').textContent = (data.drive.totalFilesInFolder || 0) + ' ไฟล์';
+            document.getElementById('diagSharingStatus').innerHTML = data.drive.isPublic 
+                ? '<span style="color:var(--success);"><i class="fas fa-lock-open"></i> สาธารณะ (ถูกต้อง)</span>' 
+                : '<span style="color:var(--warning);"><i class="fas fa-lock"></i> ยังไม่เปิดสาธารณะ</span>';
+            const driveBadge = document.getElementById('diagDriveBadge');
+            driveBadge.textContent = data.drive.connected ? 'เชื่อมต่อแล้ว' : 'ไม่พบ';
+            driveBadge.className = data.drive.connected ? 'badge badge-success' : 'badge badge-danger';
+
+            // Document card
+            document.getElementById('diagTotalExpectedDocs').textContent = (data.documents.totalRecords || 0) + ' รายการ';
+            document.getElementById('diagFoundDriveFiles').textContent = (data.documents.existingFilesInDrive || 0) + ' ไฟล์';
+            const brokenCount = (data.documents.brokenLinks || []).length;
+            const brokenEl = document.getElementById('diagBrokenLinksCount');
+            brokenEl.textContent = brokenCount + ' ไฟล์';
+            brokenEl.style.color = brokenCount === 0 ? 'var(--success)' : 'var(--danger)';
+            const docBadge = document.getElementById('diagDocBadge');
+            docBadge.textContent = brokenCount === 0 ? 'สมบูรณ์ 100%' : `มีปัญหา ${brokenCount}`;
+            docBadge.className = brokenCount === 0 ? 'badge badge-success' : 'badge badge-warning';
+
+            // Orphan cleaner card
+            const orphanCount = (data.documents.orphanFiles || []).length;
+            document.getElementById('diagOrphansCount').textContent = orphanCount + ' ไฟล์';
+            document.getElementById('diagStorageStatus').textContent = orphanCount > 0 ? 'มีไฟล์ตกค้าง' : 'สะอาด เรียบร้อย';
+            document.getElementById('diagOrphanAdvice').textContent = orphanCount > 0 ? 'กด "ล้างไฟล์ขยะ" ได้' : 'ไม่มีไฟล์ขยะ';
+            const orphanBadge = document.getElementById('diagOrphanBadge');
+            orphanBadge.textContent = orphanCount === 0 ? 'สะอาด' : `พบ ${orphanCount} ไฟล์`;
+            orphanBadge.className = orphanCount === 0 ? 'badge badge-success' : 'badge badge-info';
+
+            // Issues section
+            const issuesSection = document.getElementById('healthIssuesSection');
+            const issuesList = document.getElementById('healthIssuesList');
+            if (data.issues && data.issues.length > 0) {
+                issuesList.innerHTML = data.issues.map(iss => `
+                    <div class="issue-item">
+                        <i class="fas ${iss.type === 'ERROR' ? 'fa-times-circle' : 'fa-exclamation-triangle'}" style="color:${iss.type === 'ERROR' ? 'var(--danger)' : 'var(--warning)'}; margin-top:2px;"></i>
+                        <div>
+                            <strong style="color:var(--secondary);">${iss.title}</strong>
+                            <div style="color:var(--text-muted); font-size:0.8rem; margin-top:1px;">${iss.detail}</div>
+                        </div>
+                    </div>
+                `).join('');
+                issuesSection.style.display = 'block';
+            } else {
+                issuesSection.style.display = 'none';
+            }
+        } else {
+            showAlert('error', 'ไม่สามารถตรวจสุขภาพระบบได้: ' + (result?.message || ''));
+        }
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาดในการตรวจสุขภาพระบบ: ' + err.message);
+    }
+}
+
+async function executeSystemRepair(repairType = 'all') {
+    const titles = {
+        all: 'ซ่อมแซมระบบทั้งหมด (สิทธิ์แชร์ไฟล์, ล้างไฟล์ขยะ, ปรับโครงสร้าง Sheet)',
+        orphans: 'ล้างไฟล์ขยะที่ไม่มีเจ้าของใน Google Drive',
+        permissions: 'เปิดสิทธิ์แชร์โฟลเดอร์และไฟล์ทั้งหมดใน Google Drive เป็นสาธารณะ'
+    };
+    if (!confirm(`ยืนยันการดำเนินการ: ${titles[repairType] || repairType} ใช่หรือไม่?`)) return;
+
+    try {
+        showLoading(true);
+        showAlert('info', 'กำลังดำเนินการซ่อมแซมระบบ...');
+        const result = await callAPI(SCRIPT_URL, {
+            method: 'POST',
+            body: { action: 'repairSystemIssues', repairType: repairType }
+        });
+        if (result && result.success) {
+            showAlert('success', '✅ ' + (result.message || 'ซ่อมแซมระบบเรียบร้อยแล้ว'));
+            StorageCache.clear();
+            await runSystemHealthCheck();
+        } else {
+            showAlert('error', '❌ ซ่อมแซมไม่สำเร็จ: ' + (result?.message || ''));
+        }
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาด: ' + err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+// ============================================================
+//  AUDIT TRAIL / ACTIVITY LOGS
+// ============================================================
+
+let allAuditLogs = [];
+
+function openAuditLogsModal() {
+    document.getElementById('auditLogsModal').classList.add('active');
+    loadAuditLogs();
+}
+
+function closeAuditLogsModal() {
+    document.getElementById('auditLogsModal').classList.remove('active');
+}
+
+async function loadAuditLogs() {
+    const tbody = document.getElementById('auditLogsTableBody');
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:30px; color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> กำลังโหลดประวัติกิจกรรม...</td></tr>';
+    
+    try {
+        const result = await callAPI(`${SCRIPT_URL}?action=getActivityLogs&limit=200`);
+        if (result && result.success) {
+            allAuditLogs = result.data || [];
+            renderAuditLogsTable(allAuditLogs);
+        } else {
+            tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--danger);">${result?.message || 'ไม่สามารถโหลดประวัติกิจกรรมได้'}</td></tr>`;
+        }
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--danger);">เกิดข้อผิดพลาด: ${err.message}</td></tr>`;
+    }
+}
+
+function renderAuditLogsTable(logs) {
+    const tbody = document.getElementById('auditLogsTableBody');
+    if (!logs || logs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:30px; color:var(--text-muted);">ยังไม่มีประวัติกิจกรรมในระบบ</td></tr>';
+        return;
+    }
+
+    const actionBadgeClasses = {
+        ADD_STUDENT: 'add',
+        UPDATE_STUDENT: 'add',
+        DELETE_STUDENT: 'delete',
+        BULK_DELETE: 'delete',
+        UPLOAD_DOCUMENT: 'upload',
+        DELETE_DOCUMENT: 'delete',
+        CLEAR_ALL_DOCS: 'delete',
+        ADMIN_LOGIN: 'auth',
+        LOGIN_FAILED: 'auth',
+        CHANGE_PASSWORD: 'auth',
+        SYSTEM_REPAIR: 'upload',
+        CONFIG_CHANGE: 'upload'
+    };
+
+    tbody.innerHTML = logs.map(log => {
+        const actionClass = actionBadgeClasses[log.action] || 'upload';
+        const isSuccess = (log.status || 'SUCCESS').toUpperCase() === 'SUCCESS';
+        let formattedTime = log.timestamp;
+        try {
+            const d = new Date(log.timestamp);
+            formattedTime = d.toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'medium' });
+        } catch(e) {}
+
+        return `
+            <tr>
+                <td style="font-size:0.8rem; color:var(--text-secondary);">${formattedTime}</td>
+                <td><span class="badge-action ${actionClass}">${log.action}</span></td>
+                <td>${log.details || '-'}</td>
+                <td><strong>${log.user || 'system'}</strong></td>
+                <td>
+                    <span class="${isSuccess ? 'badge-status-success' : 'badge-status-failed'}">
+                        <i class="fas ${isSuccess ? 'fa-check' : 'fa-times'}"></i> ${log.status || 'SUCCESS'}
+                    </span>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function filterAuditLogs() {
+    const search = document.getElementById('logSearchInput').value.toLowerCase().trim();
+    const actionFilter = document.getElementById('logActionFilter').value;
+
+    const filtered = allAuditLogs.filter(log => {
+        const matchSearch = !search || 
+            (log.action && log.action.toLowerCase().includes(search)) ||
+            (log.details && log.details.toLowerCase().includes(search)) ||
+            (log.user && log.user.toLowerCase().includes(search));
+        const matchAction = !actionFilter || log.action === actionFilter;
+        return matchSearch && matchAction;
+    });
+
+    renderAuditLogsTable(filtered);
+}
+
+async function clearAllAuditLogs() {
+    if (!confirm('ยืนยันการล้างประวัติกิจกรรมทั้งหมดในระบบใช่หรือไม่?')) return;
+    try {
+        showLoading(true);
+        const result = await callAPI(SCRIPT_URL, {
+            method: 'POST',
+            body: { action: 'clearActivityLogs' }
+        });
+        if (result && result.success) {
+            showAlert('success', '✅ ล้างประวัติกิจกรรมเรียบร้อยแล้ว');
+            await loadAuditLogs();
+        } else {
+            showAlert('error', result?.message || 'ล้างประวัติไม่สำเร็จ');
+        }
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาด: ' + err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+function exportLogsToJSON() {
+    if (!allAuditLogs || allAuditLogs.length === 0) return showAlert('error', 'ไม่มีข้อมูลประวัติกิจกรรม');
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(allAuditLogs, null, 2));
+    const a = document.createElement('a');
+    a.setAttribute('href', dataStr);
+    a.setAttribute('download', `activity_logs_${new Date().toISOString().split('T')[0]}.json`);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    showAlert('success', 'ส่งออกไฟล์ Logs สำเร็จ');
+}
+
+// ============================================================
+//  CHANGE ADMIN PASSWORD
+// ============================================================
+
+function openChangePasswordModal() {
+    document.getElementById('oldPasswordInput').value = '';
+    document.getElementById('newPasswordInput').value = '';
+    document.getElementById('confirmNewPasswordInput').value = '';
+    document.getElementById('changePasswordModal').classList.add('active');
+}
+
+function closeChangePasswordModal() {
+    document.getElementById('changePasswordModal').classList.remove('active');
+}
+
+async function saveNewAdminPassword() {
+    const oldPass = document.getElementById('oldPasswordInput').value.trim();
+    const newPass = document.getElementById('newPasswordInput').value.trim();
+    const confirmPass = document.getElementById('confirmNewPasswordInput').value.trim();
+
+    if (!oldPass || !newPass || !confirmPass) {
+        return showAlert('error', 'กรุณากรอกข้อมูลให้ครบทุกช่อง');
+    }
+    if (newPass.length < 4) {
+        return showAlert('error', 'รหัสผ่านใหม่ต้องมีความยาวอย่างน้อย 4 ตัวอักษร');
+    }
+    if (newPass !== confirmPass) {
+        return showAlert('error', 'รหัสผ่านใหม่และการยืนยันรหัสผ่านไม่ตรงกัน');
+    }
+
+    try {
+        showLoading(true);
+        const result = await callAPI(SCRIPT_URL, {
+            method: 'POST',
+            body: {
+                action: 'changeAdminPassword',
+                oldPassword: oldPass,
+                newPassword: newPass
+            }
+        });
+        if (result && result.success) {
+            showAlert('success', '🔒 ' + (result.message || 'เปลี่ยนรหัสผ่านแอดมินเรียบร้อยแล้ว'));
+            closeChangePasswordModal();
+        } else {
+            showAlert('error', '❌ ' + (result?.message || 'เปลี่ยนรหัสผ่านไม่สำเร็จ'));
+        }
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาด: ' + err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+// ============================================================
+//  1-CLICK DATABASE BACKUP & RESTORE
+// ============================================================
+
+let currentBackupsList = [];
+
+function openBackupModal() {
+    document.getElementById('backupRestoreModal').classList.add('active');
+    loadBackupSnapshots();
+}
+
+function closeBackupModal() {
+    document.getElementById('backupRestoreModal').classList.remove('active');
+}
+
+async function loadBackupSnapshots() {
+    const tbody = document.getElementById('backupListTableBody');
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:25px; color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> กำลังโหลดรายการจุดสำรองข้อมูล...</td></tr>';
+
+    try {
+        const result = await callAPI(`${SCRIPT_URL}?action=listBackupSnapshots`);
+        if (result && result.success) {
+            currentBackupsList = result.data || [];
+            renderBackupListTable(currentBackupsList);
+        } else {
+            tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; padding:20px; color:var(--danger);">${result?.message || 'ไม่สามารถโหลดรายการสำรองได้'}</td></tr>`;
+        }
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; padding:20px; color:var(--danger);">เกิดข้อผิดพลาด: ${err.message}</td></tr>`;
+    }
+}
+
+function renderBackupListTable(backups) {
+    const tbody = document.getElementById('backupListTableBody');
+    if (!backups || backups.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" style="text-align:center; padding:25px; color:var(--text-muted);">ยังไม่มีจุดสำรองข้อมูลใน Google Sheets</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = backups.map(b => {
+        return `
+            <tr>
+                <td><strong><i class="fas fa-table" style="color:var(--primary); margin-right:6px;"></i> ${b.sheetName}</strong></td>
+                <td><span class="status-pill uploaded" style="font-size:0.8rem;">${b.totalStudents} คน</span></td>
+                <td>
+                    <div style="display:flex; gap:6px;">
+                        <button type="button" class="btn btn-warning btn-xs" onclick="restoreSnapshot('${b.sheetName}')" title="กู้คืนข้อมูล">
+                            <i class="fas fa-undo"></i> กู้คืน
+                        </button>
+                        <button type="button" class="btn btn-danger btn-xs" onclick="deleteSnapshot('${b.sheetName}')" title="ลบแท็บสำรองนี้">
+                            <i class="fas fa-trash"></i> ลบ
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+async function createSnapshotNow() {
+    try {
+        showLoading(true);
+        showAlert('info', 'กำลังสร้างจุดสำรองข้อมูล Snapshot ใน Google Sheets...');
+        const result = await callAPI(SCRIPT_URL, {
+            method: 'POST',
+            body: { action: 'createBackupSnapshot' }
+        });
+        if (result && result.success) {
+            showAlert('success', '💾 ' + (result.message || 'สร้างจุดสำรองข้อมูลสำเร็จ'));
+            await loadBackupSnapshots();
+        } else {
+            showAlert('error', '❌ ' + (result?.message || 'สร้างจุดสำรองข้อมูลไม่สำเร็จ'));
+        }
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาด: ' + err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+async function restoreSnapshot(sheetName) {
+    if (!confirm(`⚠️ ยืนยันการกู้คืนข้อมูลจาก Snapshot "${sheetName}" ใช่หรือไม่?\n\nข้อมูลนักศึกษาปัจจุบันจะถูกแทนที่ด้วยข้อมูลจากแท็บนี้`)) return;
+
+    try {
+        showLoading(true);
+        showAlert('info', 'กำลังกู้คืนข้อมูล...');
+        const result = await callAPI(SCRIPT_URL, {
+            method: 'POST',
+            body: { action: 'restoreBackupSnapshot', sheetName: sheetName }
+        });
+        if (result && result.success) {
+            showAlert('success', '✅ ' + (result.message || 'กู้คืนข้อมูลเรียบร้อยแล้ว'));
+            StorageCache.clear();
+            closeBackupModal();
+            await loadDashboardData(true);
+        } else {
+            showAlert('error', '❌ ' + (result?.message || 'กู้คืนข้อมูลไม่สำเร็จ'));
+        }
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาด: ' + err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+async function deleteSnapshot(sheetName) {
+    if (!confirm(`ต้องการลบแท็บสำรองข้อมูล "${sheetName}" ใช่หรือไม่?`)) return;
+
+    try {
+        showLoading(true);
+        const result = await callAPI(SCRIPT_URL, {
+            method: 'POST',
+            body: { action: 'deleteBackupSnapshot', sheetName: sheetName }
+        });
+        if (result && result.success) {
+            showAlert('success', '🗑️ ' + (result.message || 'ลบแท็บสำรองเรียบร้อยแล้ว'));
+            await loadBackupSnapshots();
+        } else {
+            showAlert('error', '❌ ' + (result?.message || 'ลบไม่สำเร็จ'));
+        }
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาด: ' + err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+function downloadFullJsonBackup() {
+    if (!allStudents || allStudents.length === 0) return showAlert('error', 'ไม่มีข้อมูลนักศึกษาสำหรับสำรอง');
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(allStudents, null, 2));
+    const a = document.createElement('a');
+    a.setAttribute('href', dataStr);
+    a.setAttribute('download', `students_backup_${new Date().toISOString().split('T')[0]}.json`);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    showAlert('success', 'ดาวน์โหลดไฟล์สำรอง JSON เรียบร้อยแล้ว');
+}
+
+async function handleRestoreJsonFileSelect(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+        const text = await file.text();
+        const json = JSON.parse(text);
+        const students = Array.isArray(json) ? json : (json.data || json.students || []);
+        if (!students || students.length === 0) {
+            return showAlert('error', 'ไม่พบข้อมูลนักศึกษาในไฟล์ JSON ที่ถูกต้อง');
+        }
+
+        if (!confirm(`พบข้อมูลนักศึกษา ${students.length} รายการในไฟล์ ต้องการนำเข้าและกู้คืนใช่หรือไม่?`)) return;
+
+        showLoading(true);
+        showAlert('info', `กำลังกู้คืนข้อมูล ${students.length} รายการ...`);
+        const result = await callAPI(SCRIPT_URL, {
+            method: 'POST',
+            body: { action: 'importStudentsFromExcel', students: students }
+        });
+        if (result && result.success) {
+            showAlert('success', '✅ ' + (result.message || 'กู้คืนข้อมูลจากไฟล์ JSON สำเร็จ'));
+            StorageCache.clear();
+            closeBackupModal();
+            await loadDashboardData(true);
+        } else {
+            showAlert('error', '❌ ' + (result?.message || 'กู้คืนข้อมูลไม่สำเร็จ'));
+        }
+    } catch (err) {
+        showAlert('error', 'ไฟล์ JSON ไม่ถูกต้องหรือเกิดข้อผิดพลาด: ' + err.message);
+    } finally {
+        showLoading(false);
+        e.target.value = '';
+    }
+}
+
+// ============================================================
+//  STUDENT DIRECT LINK & QR CODE GENERATOR
+// ============================================================
+
+let currentQrStudent = null;
+
+function getStudentDirectUrl(studentId) {
+    const base = window.location.origin + window.location.pathname;
+    return `${base}?studentId=${encodeURIComponent(studentId)}`;
+}
+
+function copyStudentDirectLink(studentId) {
+    const sid = studentId || currentStudentId;
+    if (!sid) return showAlert('error', 'กรุณาระบุรหัสนักศึกษา');
+    const url = getStudentDirectUrl(sid);
+    navigator.clipboard.writeText(url).then(() => {
+        showAlert('success', `📋 คัดลอกลิงก์ตรงของรหัส ${sid} เรียบร้อยแล้ว`);
+    }).catch(() => {
+        prompt('คัดลอกลิงก์ตรง:', url);
+    });
+}
+
+async function openStudentQrModal(studentId) {
+    const sid = studentId || currentStudentId;
+    if (!sid) return showAlert('error', 'กรุณาระบุรหัสนักศึกษา');
+
+    let student = allStudents.find(s => s.id === sid);
+    if (!student) {
+        try {
+            showLoading(true);
+            const res = await callAPI(`${SCRIPT_URL}?action=getStudent&studentId=${encodeURIComponent(sid)}`);
+            if (res && res.success && res.data) student = res.data;
+        } catch(e) {} finally {
+            showLoading(false);
+        }
+    }
+
+    currentQrStudent = student || { id: sid, name: 'นักศึกษา', major: '-', level: '-' };
+
+    document.getElementById('qrStudentName').textContent = currentQrStudent.name || currentQrStudent.studentName || 'นักศึกษา';
+    document.getElementById('qrStudentId').textContent = currentQrStudent.id || currentQrStudent.studentId || sid;
+    document.getElementById('qrStudentMajor').textContent = currentQrStudent.major || '-';
+    document.getElementById('qrStudentLevel').textContent = currentQrStudent.level || currentQrStudent.educationLevel || '-';
+
+    const directUrl = getStudentDirectUrl(sid);
+    document.getElementById('qrDirectLinkInput').value = directUrl;
+
+    // Generate high-resolution QR Code
+    const qrImg = document.getElementById('qrImageElement');
+    qrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(directUrl)}&margin=10`;
+
+    document.getElementById('qrCodeModal').classList.add('active');
+}
+
+function closeQrCodeModal() {
+    document.getElementById('qrCodeModal').classList.remove('active');
+}
+
+async function downloadQrPng() {
+    if (!currentQrStudent) return;
+    const sid = currentQrStudent.id || currentQrStudent.studentId;
+    const directUrl = getStudentDirectUrl(sid);
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(directUrl)}&margin=15`;
+    
+    try {
+        showAlert('info', 'กำลังดาวน์โหลดรูปภาพ QR Code...');
+        const res = await fetch(qrUrl);
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = `QRCode_${sid}_${currentQrStudent.name || ''}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(blobUrl);
+        showAlert('success', 'ดาวน์โหลด QR Code สำเร็จ');
+    } catch(e) {
+        window.open(qrUrl, '_blank');
+    }
+}
+
+function printQrCard() {
+    if (!currentQrStudent) return;
+    const sid = currentQrStudent.id || currentQrStudent.studentId;
+    const name = currentQrStudent.name || currentQrStudent.studentName || '';
+    const major = currentQrStudent.major || '-';
+    const level = currentQrStudent.level || currentQrStudent.educationLevel || '-';
+    const directUrl = getStudentDirectUrl(sid);
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=350x350&data=${encodeURIComponent(directUrl)}&margin=10`;
+
+    const printWin = window.open('', '_blank');
+    printWin.document.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>QR Code นักศึกษา - ${sid}</title>
+            <meta charset="utf-8" />
+            <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;600;700&display=swap" rel="stylesheet">
+            <style>
+                body { font-family: 'Noto Sans Thai', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #f1f5f9; }
+                .card { background: #fff; border: 2px solid #6366f1; border-radius: 16px; padding: 28px; width: 340px; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+                h2 { margin: 0 0 4px 0; color: #1e293b; font-size: 1.3rem; }
+                p { margin: 4px 0; color: #64748b; font-size: 0.9rem; }
+                .qr-img { width: 220px; height: 220px; margin: 16px auto; display: block; border-radius: 8px; border: 1px solid #e2e8f0; }
+                .footer { font-size: 0.78rem; color: #94a3b8; margin-top: 14px; }
+                @media print {
+                    body { background: #fff; }
+                    .card { box-shadow: none; border: 2px solid #000; }
+                    .no-print { display: none; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h2>${name}</h2>
+                <p><strong>รหัสนักศึกษา: ${sid}</strong></p>
+                <p>${level} | สาขา: ${major}</p>
+                <img class="qr-img" src="${qrUrl}" alt="QR Code" />
+                <p style="font-weight:600; color:#4f46e5; font-size:0.85rem;">สแกนเพื่อเปิดหน้าระบบเอกสาร</p>
+                <div class="footer">ระบบจัดการเอกสารนักศึกษาและผู้ปกครอง</div>
+                <div class="no-print" style="margin-top:20px;">
+                    <button onclick="window.print()" style="padding:8px 18px; background:#4f46e5; color:#fff; border:none; border-radius:6px; cursor:pointer; font-family:'Noto Sans Thai';">🖨️ พิมพ์บัตร</button>
+                    <button onclick="window.close()" style="padding:8px 14px; background:#94a3b8; color:#fff; border:none; border-radius:6px; cursor:pointer; font-family:'Noto Sans Thai'; margin-left:6px;">ปิด</button>
+                </div>
+            </div>
+        </body>
+        </html>
+    `);
+    printWin.document.close();
 }
 
 // ============================================================
@@ -865,9 +1816,11 @@ function renderTable(students) {
                 <td><span class="status-pill ${complete ? 'uploaded' : 'missing'}" style="border-radius:20px;">${s.docs || '0/8'}</span></td>
                 <td>
                     <div class="action-cell">
-                        <button class="action-btn view-details" data-id="${s.id}" title="ดู"><i class="fas fa-eye"></i></button>
-                        <button class="action-btn edit-student" data-id="${s.id}" title="แก้ไข"><i class="fas fa-edit"></i></button>
-                        <button class="action-btn danger delete-student" data-id="${s.id}" title="ลบ"><i class="fas fa-trash"></i></button>
+                        <button class="action-btn view-details" data-id="${s.id}" title="ดูข้อมูล"><i class="fas fa-eye"></i></button>
+                        <button class="action-btn show-qr" data-id="${s.id}" title="QR Code ประจำตัว"><i class="fas fa-qrcode"></i></button>
+                        <button class="action-btn manage-docs" data-id="${s.id}" title="จัดการและลบเอกสาร"><i class="fas fa-folder-open"></i></button>
+                        <button class="action-btn edit-student" data-id="${s.id}" title="แก้ไขนักศึกษา"><i class="fas fa-edit"></i></button>
+                        <button class="action-btn danger delete-student" data-id="${s.id}" title="ลบนักศึกษา"><i class="fas fa-trash"></i></button>
                     </div>
                 </td>
             </tr>
@@ -1784,6 +2737,90 @@ function setupEventListeners() {
     document.getElementById('closeStudentModal').addEventListener('click', closeStudentModal);
     document.getElementById('closeDocumentViewModal').addEventListener('click', closeDocumentViewModal);
     document.getElementById('closeImportModal').addEventListener('click', closeImportModal);
+    const closeAdminDocs = document.getElementById('closeAdminDocsModal');
+    if (closeAdminDocs) closeAdminDocs.addEventListener('click', closeAdminDocsModal);
+    const closeAdminDocsBtn = document.getElementById('closeAdminDocsModalBtn');
+    if (closeAdminDocsBtn) closeAdminDocsBtn.addEventListener('click', closeAdminDocsModal);
+    const adminDeleteAllDocsBtn = document.getElementById('adminDeleteAllDocsBtn');
+    if (adminDeleteAllDocsBtn) adminDeleteAllDocsBtn.addEventListener('click', adminDeleteAllDocs);
+
+    // Health Check Modal & Actions
+    const healthCheckBtn = document.getElementById('healthCheckBtn');
+    if (healthCheckBtn) healthCheckBtn.addEventListener('click', openHealthCheckModal);
+    const closeHealthCheckModalBtn = document.getElementById('closeHealthCheckModal');
+    if (closeHealthCheckModalBtn) closeHealthCheckModalBtn.addEventListener('click', closeHealthCheckModal);
+    const closeHealthCheckBtn = document.getElementById('closeHealthCheckModalBtn');
+    if (closeHealthCheckBtn) closeHealthCheckBtn.addEventListener('click', closeHealthCheckModal);
+    const runHealthCheckBtn = document.getElementById('runHealthCheckBtn');
+    if (runHealthCheckBtn) runHealthCheckBtn.addEventListener('click', runSystemHealthCheck);
+    const autoRepairBtn = document.getElementById('autoRepairBtn');
+    if (autoRepairBtn) autoRepairBtn.addEventListener('click', () => executeSystemRepair('all'));
+    const cleanOrphansBtn = document.getElementById('cleanOrphansBtn');
+    if (cleanOrphansBtn) cleanOrphansBtn.addEventListener('click', () => executeSystemRepair('orphans'));
+    const fixSharingBtn = document.getElementById('fixSharingBtn');
+    if (fixSharingBtn) fixSharingBtn.addEventListener('click', () => executeSystemRepair('permissions'));
+
+    // Database Backup & Restore Modal & Actions
+    const backupRestoreBtn = document.getElementById('backupRestoreBtn');
+    if (backupRestoreBtn) backupRestoreBtn.addEventListener('click', openBackupModal);
+    const closeBackupModalBtn = document.getElementById('closeBackupRestoreModal');
+    if (closeBackupModalBtn) closeBackupModalBtn.addEventListener('click', closeBackupModal);
+    const closeBackupBtn = document.getElementById('closeBackupRestoreModalBtn');
+    if (closeBackupBtn) closeBackupBtn.addEventListener('click', closeBackupModal);
+    const createSnapshotBtn = document.getElementById('createSnapshotBtn');
+    if (createSnapshotBtn) createSnapshotBtn.addEventListener('click', createSnapshotNow);
+    const refreshBackupsBtn = document.getElementById('refreshBackupsBtn');
+    if (refreshBackupsBtn) refreshBackupsBtn.addEventListener('click', loadBackupSnapshots);
+    const downloadFullJsonBackupBtn = document.getElementById('downloadFullJsonBackupBtn');
+    if (downloadFullJsonBackupBtn) downloadFullJsonBackupBtn.addEventListener('click', downloadFullJsonBackup);
+    const selectRestoreJsonFileBtn = document.getElementById('selectRestoreJsonFileBtn');
+    if (selectRestoreJsonFileBtn) selectRestoreJsonFileBtn.addEventListener('click', () => document.getElementById('restoreJsonFileInput').click());
+    const restoreJsonFileInput = document.getElementById('restoreJsonFileInput');
+    if (restoreJsonFileInput) restoreJsonFileInput.addEventListener('change', handleRestoreJsonFileSelect);
+
+    // Student Direct Link & QR Code Actions
+    const copyDirectLinkBtn = document.getElementById('copyDirectLinkBtn');
+    if (copyDirectLinkBtn) copyDirectLinkBtn.addEventListener('click', () => copyStudentDirectLink());
+    const showStudentQrBtn = document.getElementById('showStudentQrBtn');
+    if (showStudentQrBtn) showStudentQrBtn.addEventListener('click', () => openStudentQrModal());
+    const closeQrCodeModalBtn = document.getElementById('closeQrCodeModal');
+    if (closeQrCodeModalBtn) closeQrCodeModalBtn.addEventListener('click', closeQrCodeModal);
+    const closeQrCodeBtn = document.getElementById('closeQrCodeModalBtn');
+    if (closeQrCodeBtn) closeQrCodeBtn.addEventListener('click', closeQrCodeModal);
+    const copyQrLinkBtn = document.getElementById('copyQrLinkBtn');
+    if (copyQrLinkBtn) copyQrLinkBtn.addEventListener('click', () => copyStudentDirectLink(currentQrStudent ? (currentQrStudent.id || currentQrStudent.studentId) : null));
+    const downloadQrPngBtn = document.getElementById('downloadQrPngBtn');
+    if (downloadQrPngBtn) downloadQrPngBtn.addEventListener('click', downloadQrPng);
+    const printQrCardBtn = document.getElementById('printQrCardBtn');
+    if (printQrCardBtn) printQrCardBtn.addEventListener('click', printQrCard);
+
+    // Audit Logs Modal & Actions
+    const auditLogsBtn = document.getElementById('auditLogsBtn');
+    if (auditLogsBtn) auditLogsBtn.addEventListener('click', openAuditLogsModal);
+    const closeAuditLogsModalBtn = document.getElementById('closeAuditLogsModal');
+    if (closeAuditLogsModalBtn) closeAuditLogsModalBtn.addEventListener('click', closeAuditLogsModal);
+    const closeAuditLogsBtn = document.getElementById('closeAuditLogsModalBtn');
+    if (closeAuditLogsBtn) closeAuditLogsBtn.addEventListener('click', closeAuditLogsModal);
+    const refreshLogsBtn = document.getElementById('refreshLogsBtn');
+    if (refreshLogsBtn) refreshLogsBtn.addEventListener('click', loadAuditLogs);
+    const clearLogsBtn = document.getElementById('clearLogsBtn');
+    if (clearLogsBtn) clearLogsBtn.addEventListener('click', clearAllAuditLogs);
+    const exportLogsJsonBtn = document.getElementById('exportLogsJsonBtn');
+    if (exportLogsJsonBtn) exportLogsJsonBtn.addEventListener('click', exportLogsToJSON);
+    const logSearchInput = document.getElementById('logSearchInput');
+    if (logSearchInput) logSearchInput.addEventListener('input', filterAuditLogs);
+    const logActionFilter = document.getElementById('logActionFilter');
+    if (logActionFilter) logActionFilter.addEventListener('change', filterAuditLogs);
+
+    // Change Admin Password Modal & Actions
+    const changePassBtn = document.getElementById('changePassBtn');
+    if (changePassBtn) changePassBtn.addEventListener('click', openChangePasswordModal);
+    const closeChangePassModalBtn = document.getElementById('closeChangePassModal');
+    if (closeChangePassModalBtn) closeChangePassModalBtn.addEventListener('click', closeChangePasswordModal);
+    const closeChangePassBtn = document.getElementById('closeChangePassBtn');
+    if (closeChangePassBtn) closeChangePassBtn.addEventListener('click', closeChangePasswordModal);
+    const saveNewPasswordBtn = document.getElementById('saveNewPasswordBtn');
+    if (saveNewPasswordBtn) saveNewPasswordBtn.addEventListener('click', saveNewAdminPassword);
 
     // Upload
     document.getElementById('dropZone').addEventListener('click', () => document.getElementById('fileInput').click());
@@ -1835,6 +2872,10 @@ function setupEventListeners() {
             document.getElementById('searchInput').value = id;
             searchStudent();
             switchMode('visitor');
+        } else if (btn.classList.contains('show-qr')) {
+            openStudentQrModal(id);
+        } else if (btn.classList.contains('manage-docs')) {
+            openAdminDocsModal(id);
         } else if (btn.classList.contains('edit-student')) {
             editStudent(id);
         } else if (btn.classList.contains('delete-student')) {
@@ -1881,8 +2922,21 @@ function init() {
     switchMode('visitor');
     restoreAdminSession();
     setupEventListeners();
-    // โหลดแคชล่วงหน้าแบบ background non-blocking
-    loadDashboardData(false).catch(() => {});
+    
+    // Check URL query parameters for Direct Link (e.g. ?studentId=26737)
+    const urlParams = new URLSearchParams(window.location.search);
+    const directStudentId = urlParams.get('studentId') || urlParams.get('id') || urlParams.get('query');
+    if (directStudentId) {
+        switchMode('visitor');
+        document.getElementById('searchInput').value = directStudentId;
+        setTimeout(() => {
+            searchStudent();
+        }, 300);
+    } else {
+        // Pre-load dashboard cache in background non-blocking
+        loadDashboardData(false).catch(() => {});
+    }
+    
     showAlert('info', '🚀 ระบบพร้อมใช้งาน (ความเร็วสูง & ซิงค์เรียลไทม์)', 2000);
 }
 
@@ -1893,6 +2947,11 @@ window.searchStudent = searchStudent;
 window.viewDocument = viewDocument;
 window.openUploadModal = openUploadModal;
 window.closeUploadModal = closeUploadModal;
+window.openAdminDocsModal = openAdminDocsModal;
+window.closeAdminDocsModal = closeAdminDocsModal;
+window.deleteDocumentDirect = deleteDocumentDirect;
+window.deleteDocumentFromAdminModal = deleteDocumentFromAdminModal;
+window.adminDeleteAllDocs = adminDeleteAllDocs;
 window.closeDocumentViewModal = closeDocumentViewModal;
 window.clearFileSelection = clearFileSelection;
 window.printReport = printReport;
@@ -1928,3 +2987,28 @@ window.testConfigConnection = testConfigConnection;
 window.openConfigSheet = openConfigSheet;
 window.openConfigFolder = openConfigFolder;
 window.copyGasCode = copyGasCode;
+window.openHealthCheckModal = openHealthCheckModal;
+window.closeHealthCheckModal = closeHealthCheckModal;
+window.runSystemHealthCheck = runSystemHealthCheck;
+window.executeSystemRepair = executeSystemRepair;
+window.openAuditLogsModal = openAuditLogsModal;
+window.closeAuditLogsModal = closeAuditLogsModal;
+window.loadAuditLogs = loadAuditLogs;
+window.filterAuditLogs = filterAuditLogs;
+window.clearAllAuditLogs = clearAllAuditLogs;
+window.exportLogsToJSON = exportLogsToJSON;
+window.openChangePasswordModal = openChangePasswordModal;
+window.closeChangePasswordModal = closeChangePasswordModal;
+window.saveNewAdminPassword = saveNewAdminPassword;
+window.openBackupModal = openBackupModal;
+window.closeBackupModal = closeBackupModal;
+window.loadBackupSnapshots = loadBackupSnapshots;
+window.createSnapshotNow = createSnapshotNow;
+window.restoreSnapshot = restoreSnapshot;
+window.deleteSnapshot = deleteSnapshot;
+window.downloadFullJsonBackup = downloadFullJsonBackup;
+window.openStudentQrModal = openStudentQrModal;
+window.closeQrCodeModal = closeQrCodeModal;
+window.copyStudentDirectLink = copyStudentDirectLink;
+window.downloadQrPng = downloadQrPng;
+window.printQrCard = printQrCard;
