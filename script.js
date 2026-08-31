@@ -10,7 +10,7 @@ let isAdminLoggedIn = false;
 
 // ค่าคอนฟิกเริ่มต้นของระบบ (Default Configuration)
 const DEFAULT_CONFIG = {
-    scriptUrl: 'https://script.google.com/macros/s/AKfycbwAsjXjrMlNw-MSc860oZ9FgofZhKVhGmriQm-j5hpOGVeyV1Se5fARFSXfOYR7zYImzA/exec',
+    scriptUrl: 'https://script.google.com/macros/s/AKfycbyIlRF-pGuWbPqRPtvIqUjMluAZHKWwtnkMroexHlbmGUfbs0bxBbcFY_s-KIghGxlJBg/exec',
     spreadsheetId: '1kt0l2eKCbKvYvtLtnhDAleolzpxFB4fos6ZNQ87bDB0',
     documentsFolderId: '12CwpLW7vAf1492osJZSraprBJFaH9ItV',
     sheetName: 'Students'
@@ -207,6 +207,10 @@ function getDocTypeName(docType, guardian = null) {
     const map = {
         studentIdCard: 'สำเนาบัตรประชาชนนักศึกษา',
         studentHouseReg: 'สำเนาทะเบียนบ้านนักศึกษา',
+        studentTranscript: 'ใบผลการเรียน (ปพ. / Transcript)',
+        studentNameChange: 'ใบสำคัญการเปลี่ยนชื่อ-สกุล',
+        studentGradCert: 'วุฒิการศึกษาเดิม / ประกาศนียบัตร',
+        studentBirthCert: 'สูติบัตร / ใบเกิด',
         guardianIdCard: 'สำเนาบัตรประชาชนผู้ปกครอง',
         guardianHouseReg: 'สำเนาทะเบียนบ้านผู้ปกครอง'
     };
@@ -650,7 +654,11 @@ function displayStudent(data) {
 
     renderGrid('studentDocsGrid', [
         { docType: 'studentIdCard', label: 'สำเนาบัตรประชาชน', icon: 'fa-id-card' },
-        { docType: 'studentHouseReg', label: 'สำเนาทะเบียนบ้าน', icon: 'fa-home' }
+        { docType: 'studentHouseReg', label: 'สำเนาทะเบียนบ้าน', icon: 'fa-home' },
+        { docType: 'studentTranscript', label: 'ใบผลการเรียน (ปพ.)', icon: 'fa-graduation-cap' },
+        { docType: 'studentNameChange', label: 'ใบเปลี่ยนชื่อ-สกุล', icon: 'fa-file-signature' },
+        { docType: 'studentGradCert', label: 'วุฒิการศึกษาเดิม', icon: 'fa-award' },
+        { docType: 'studentBirthCert', label: 'สูติบัตร / ใบเกิด', icon: 'fa-baby' }
     ]);
     renderGrid('fatherDocsGrid', [
         { docType: 'guardianIdCard', guardian: 'father', label: 'บัตรประชาชนพ่อ', icon: 'fa-male' },
@@ -664,6 +672,53 @@ function displayStudent(data) {
         { docType: 'guardianIdCard', guardian: 'other', label: 'บัตรประชาชนผู้ปกครองอื่น', icon: 'fa-user-tie' },
         { docType: 'guardianHouseReg', guardian: 'other', label: 'ทะเบียนบ้านผู้ปกครองอื่น', icon: 'fa-house-user' }
     ]);
+
+    renderExtraDocsGrid(data.documents ? (data.documents.extraDocs || []) : [], data.studentId || data.id);
+}
+
+function renderExtraDocsGrid(extraDocs, studentId) {
+    const container = document.getElementById('extraDocsGrid');
+    if (!container) return;
+
+    if (!extraDocs || extraDocs.length === 0) {
+        container.innerHTML = `
+            <div class="extra-doc-empty">
+                <i class="fas fa-folder-open" style="font-size:2rem; color:var(--text-muted); margin-bottom:8px; display:block;"></i>
+                ยังไม่มีเอกสารเพิ่มเติมสำหรับนักศึกษาคนนี้<br/>
+                <span style="font-size:0.8rem; color:var(--text-secondary);">กดปุ่ม <strong>"➕ อัปโหลดเอกสารเพิ่มเติม"</strong> เพื่อเพิ่มเอกสาร</span>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = extraDocs.map(doc => {
+        let uploadDate = '';
+        try {
+            if (doc.uploadedAt) {
+                uploadDate = new Date(doc.uploadedAt).toLocaleDateString('th-TH', { dateStyle: 'medium' });
+            }
+        } catch(e) {}
+
+        return `
+            <div class="extra-doc-card">
+                <div class="extra-doc-header">
+                    <div class="extra-doc-icon"><i class="fas fa-file-alt"></i></div>
+                    <div class="extra-doc-info">
+                        <div class="extra-doc-title">${doc.title || 'เอกสารเพิ่มเติม'}</div>
+                        <div class="extra-doc-meta">${doc.fileName || ''} ${uploadDate ? `• ${uploadDate}` : ''}</div>
+                    </div>
+                </div>
+                <div class="extra-doc-actions">
+                    <button class="btn btn-primary btn-xs" onclick="viewExtraDoc('${doc.fileName || ''}', '${encodeURIComponent(doc.title || '')}')">
+                        <i class="fas fa-eye"></i> ดูเอกสาร
+                    </button>
+                    <button class="btn btn-danger btn-xs" onclick="deleteExtraDoc('${studentId || currentStudentId}','${doc.id}','${doc.title || ''}')" title="ลบเอกสารนี้">
+                        <i class="fas fa-trash"></i> ลบ
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
 }
 
 // ============================================================
@@ -779,6 +834,183 @@ async function confirmUpload() {
 }
 
 // ============================================================
+//  EXTRA DOCUMENTS MANAGEMENT
+// ============================================================
+let preparedExtraUploadData = null;
+let selectedExtraFile = null;
+
+function openUploadExtraDocModal() {
+    if (!currentStudentId) return showAlert('error', 'กรุณาค้นหานักศึกษาก่อน');
+    document.getElementById('extraDocTitleInput').value = '';
+    document.getElementById('extraDocFileInput').value = '';
+    document.getElementById('extraDocFilePreview').style.display = 'none';
+    selectedExtraFile = null;
+    preparedExtraUploadData = null;
+    document.getElementById('uploadExtraDocModal').classList.add('active');
+}
+
+function closeUploadExtraDocModal() {
+    document.getElementById('uploadExtraDocModal').classList.remove('active');
+    selectedExtraFile = null;
+    preparedExtraUploadData = null;
+}
+
+async function handleExtraDocFileSelect(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const valid = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!valid.includes(file.type)) return showAlert('error', 'กรุณาเลือก PDF หรือรูปภาพ (JPG, PNG, WebP)');
+    if (file.size > 25 * 1024 * 1024) return showAlert('error', 'ขนาดไฟล์ต้นฉบับต้องไม่เกิน 25MB');
+    
+    selectedExtraFile = file;
+    const fileNameEl = document.getElementById('extraDocFileName');
+    fileNameEl.innerHTML = `<i class="fas fa-file"></i> ${file.name} (${formatFileSize(file.size)}) <span style="color:var(--primary);"><i class="fas fa-spinner fa-spin"></i> กำลังเตรียมไฟล์...</span>`;
+    document.getElementById('extraDocFilePreview').style.display = 'block';
+
+    try {
+        const comp = await compressImageFile(file);
+        preparedExtraUploadData = comp;
+        
+        let badgeHtml = '';
+        if (comp.isImage && comp.reduction > 0) {
+            badgeHtml = `<br/><span class="compression-badge"><i class="fas fa-bolt"></i> บีบอัดอัตโนมัติ: ${formatFileSize(comp.originalSize)} ➔ ${formatFileSize(comp.compressedSize)} (ลดลง ${comp.reduction}%)</span>`;
+        }
+        fileNameEl.innerHTML = `<i class="fas fa-file-check" style="color:var(--success);"></i> ${file.name} ${badgeHtml}`;
+        showAlert('success', 'เลือกไฟล์พร้อมอัปโหลด: ' + file.name);
+    } catch (err) {
+        preparedExtraUploadData = null;
+        fileNameEl.textContent = `${file.name} (${formatFileSize(file.size)})`;
+        showAlert('warning', 'พร้อมอัปโหลดไฟล์ต้นฉบับ');
+    }
+}
+
+async function confirmUploadExtraDoc() {
+    const title = document.getElementById('extraDocTitleInput').value.trim();
+    if (!title) return showAlert('error', 'กรุณากรอกชื่อหรือรายละเอียดเอกสาร');
+    if (!selectedExtraFile) return showAlert('error', 'กรุณาเลือกไฟล์');
+    if (!currentStudentId) return showAlert('error', 'ไม่พบรหัสนักศึกษา');
+
+    try {
+        showLoading(true);
+        let base64 = preparedExtraUploadData ? preparedExtraUploadData.base64 : await fileToBase64(selectedExtraFile);
+        let contentType = preparedExtraUploadData ? preparedExtraUploadData.contentType : selectedExtraFile.type;
+        
+        const payload = {
+            action: 'uploadExtraDocument',
+            studentId: currentStudentId,
+            title: title,
+            filename: selectedExtraFile.name,
+            fileData: base64,
+            contentType: contentType
+        };
+
+        const result = await callAPI(SCRIPT_URL, { method: 'POST', body: payload });
+        if (result.success) {
+            closeUploadExtraDocModal();
+            showAlert('success', `✅ อัปโหลดเอกสารเพิ่มเติม "${title}" สำเร็จ`);
+            
+            cache.delete('search_' + currentStudentId);
+            StorageCache.delete('dashboard_data');
+            
+            if (currentMode === 'visitor' && currentStudentId) {
+                try {
+                    const refreshResult = await callAPI(
+                        `${SCRIPT_URL}?action=searchStudent&query=${encodeURIComponent(currentStudentId)}`
+                    );
+                    if (refreshResult.success) {
+                        displayStudent(refreshResult.data);
+                    }
+                } catch (e) { }
+            }
+            if (currentMode === 'admin') {
+                if (adminCurrentDocsStudent) {
+                    const freshRes = await callAPI(`${SCRIPT_URL}?action=getStudent&studentId=${encodeURIComponent(currentStudentId)}`);
+                    if (freshRes && freshRes.success && freshRes.data) {
+                        adminCurrentDocsStudent = freshRes.data;
+                        renderAdminDocsList(adminCurrentDocsStudent);
+                    }
+                }
+                cache.delete('all_students');
+                await loadStudentsTable();
+                await loadStatistics();
+            }
+        } else {
+            showAlert('error', result.message || 'อัปโหลดเอกสารเพิ่มเติมไม่สำเร็จ');
+        }
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาด: ' + err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+async function deleteExtraDoc(studentId, docId, docTitle, isFromAdminModal = false) {
+    if (!studentId || !docId) return;
+    if (!confirm(`คุณต้องการลบเอกสารเพิ่มเติม "${docTitle || 'นี้'}" ใช่หรือไม่?`)) return;
+
+    try {
+        showLoading(true);
+        const result = await callAPI(SCRIPT_URL, {
+            method: 'POST',
+            body: {
+                action: 'deleteExtraDocument',
+                studentId: studentId,
+                docId: docId
+            }
+        });
+
+        if (result && result.success) {
+            showAlert('success', `✅ ลบเอกสาร "${docTitle || ''}" เรียบร้อยแล้ว`);
+            cache.delete('search_' + studentId);
+            StorageCache.delete('dashboard_data');
+
+            if (isFromAdminModal && adminCurrentDocsStudent) {
+                const freshRes = await callAPI(`${SCRIPT_URL}?action=getStudent&studentId=${encodeURIComponent(studentId)}`);
+                if (freshRes && freshRes.success && freshRes.data) {
+                    adminCurrentDocsStudent = freshRes.data;
+                    renderAdminDocsList(adminCurrentDocsStudent);
+                }
+                loadDashboardData(true, true).catch(() => {});
+            } else if (currentStudentId === studentId && currentMode === 'visitor') {
+                await searchStudent();
+            }
+        } else {
+            showAlert('error', result?.message || 'ลบเอกสารไม่สำเร็จ');
+        }
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาด: ' + err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+async function viewExtraDoc(fileName, docTitle = '') {
+    if (!fileName) return showAlert('error', 'ไม่พบชื่อไฟล์เอกสาร');
+    try {
+        showLoading(true);
+        let url = `${SCRIPT_URL}?action=getDocument&studentId=${currentStudentId || ''}&documentType=extra&fileName=${encodeURIComponent(fileName)}`;
+        const result = await callAPI(url);
+        if (result && result.success && result.data) {
+            const previewUrl = result.data.previewUrl || result.data.fileUrl;
+            const downloadUrl = result.data.directDownloadUrl || result.data.fileUrl;
+            document.getElementById('documentViewer').src = previewUrl;
+            document.getElementById('documentViewer').style.display = 'block';
+            document.getElementById('documentNotFound').style.display = 'none';
+            document.getElementById('downloadDocumentLink').href = downloadUrl;
+            document.getElementById('deleteDocumentBtn').style.display = 'none';
+            document.getElementById('documentViewModal').classList.add('active');
+        } else {
+            showAlert('info', 'กำลังเปิดดูเอกสาร...');
+            window.open(`https://drive.google.com/open?id=${fileName}`, '_blank');
+        }
+    } catch (err) {
+        showAlert('error', 'เกิดข้อผิดพลาดในการเปิดดูเอกสาร: ' + err.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+// ============================================================
 //  VIEW DOCUMENT
 // ============================================================
 async function viewDocument(docType, guardian = '') {
@@ -856,6 +1088,10 @@ let adminCurrentDocsStudent = null;
 const ALL_DOC_CONFIGS = [
     { docType: 'studentIdCard', guardian: null, label: 'สำเนาบัตรประชาชนนักศึกษา', icon: 'fa-id-card' },
     { docType: 'studentHouseReg', guardian: null, label: 'สำเนาทะเบียนบ้านนักศึกษา', icon: 'fa-home' },
+    { docType: 'studentTranscript', guardian: null, label: 'ใบผลการเรียน (ปพ. / Transcript)', icon: 'fa-graduation-cap' },
+    { docType: 'studentNameChange', guardian: null, label: 'ใบสำคัญการเปลี่ยนชื่อ-สกุล', icon: 'fa-file-signature' },
+    { docType: 'studentGradCert', guardian: null, label: 'วุฒิการศึกษาเดิม / ประกาศนียบัตร', icon: 'fa-award' },
+    { docType: 'studentBirthCert', guardian: null, label: 'สูติบัตร / ใบเกิด', icon: 'fa-baby' },
     { docType: 'guardianIdCard', guardian: 'father', label: 'สำเนาบัตรประชาชนผู้ปกครอง (พ่อ)', icon: 'fa-male' },
     { docType: 'guardianHouseReg', guardian: 'father', label: 'สำเนาทะเบียนบ้านผู้ปกครอง (พ่อ)', icon: 'fa-house-user' },
     { docType: 'guardianIdCard', guardian: 'mother', label: 'สำเนาบัตรประชาชนผู้ปกครอง (แม่)', icon: 'fa-female' },
@@ -910,6 +1146,7 @@ function renderAdminDocsList(student) {
     if (!listContainer) return;
 
     const docs = student.documents || {};
+    const extraDocs = docs.extraDocs || [];
     let uploadedCount = 0;
 
     let html = ALL_DOC_CONFIGS.map(cfg => {
@@ -956,12 +1193,44 @@ function renderAdminDocsList(student) {
         `;
     }).join('');
 
+    // Render Extra Documents if any
+    if (extraDocs && extraDocs.length > 0) {
+        html += `
+            <div style="margin: 20px 0 10px; font-weight: 700; color: var(--secondary); display:flex; align-items:center; gap:8px;">
+                <i class="fas fa-folder-plus text-primary"></i> เอกสารอื่นๆ เพิ่มเติม (${extraDocs.length} ไฟล์)
+            </div>
+        `;
+        html += extraDocs.map(exDoc => {
+            return `
+                <div class="admin-doc-item is-uploaded" style="border-left-color:var(--info);">
+                    <div class="admin-doc-info">
+                        <div class="admin-doc-icon" style="background:rgba(14,165,233,0.1); color:var(--info);"><i class="fas fa-file-alt"></i></div>
+                        <div class="admin-doc-text">
+                            <div class="admin-doc-title">${exDoc.title || 'เอกสารเพิ่มเติม'}</div>
+                            <div class="admin-doc-filename" style="color:var(--text-secondary);">
+                                <span style="color:var(--info); font-weight:600;"><i class="fas fa-paperclip"></i> แนบเพิ่มเติม</span> • ${exDoc.fileName || ''}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="admin-doc-actions">
+                        <button type="button" class="btn btn-info btn-xs" onclick="viewExtraDoc('${exDoc.fileName || ''}', '${encodeURIComponent(exDoc.title || '')}')" title="ดูเอกสาร">
+                            <i class="fas fa-eye"></i> ดู
+                        </button>
+                        <button type="button" class="btn btn-danger btn-xs" onclick="deleteExtraDoc('${student.id || student.studentId}','${exDoc.id}','${exDoc.title || ''}', true)" title="ลบเอกสารนี้">
+                            <i class="fas fa-trash"></i> ลบ
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
     listContainer.innerHTML = html;
 
     const summaryBadge = document.getElementById('adminDocsSummaryBadge');
     if (summaryBadge) {
-        summaryBadge.textContent = `${uploadedCount}/8 เอกสาร`;
-        summaryBadge.className = `status-pill ${uploadedCount === 8 ? 'uploaded' : 'missing'}`;
+        summaryBadge.textContent = `${uploadedCount}/12 เอกสารหลัก` + (extraDocs.length > 0 ? ` (+${extraDocs.length} เอกสารเพิ่มเติม)` : '');
+        summaryBadge.className = `status-pill ${uploadedCount === 12 ? 'uploaded' : 'missing'}`;
     }
 }
 
@@ -2888,7 +3157,7 @@ function setupEventListeners() {
     });
 
     // Drag & drop
-    ['dropZone', 'excelDropZone'].forEach(id => {
+    ['dropZone', 'excelDropZone', 'extraDocDropZone'].forEach(id => {
         const el = document.getElementById(id);
         if (!el) return;
         el.addEventListener('dragover', e => { e.preventDefault();
@@ -2905,6 +3174,30 @@ function setupEventListeners() {
             }
         });
     });
+
+    // Upload Extra Doc Modal
+    const openExtraBtn = document.getElementById('openUploadExtraDocBtn');
+    if (openExtraBtn) openExtraBtn.addEventListener('click', openUploadExtraDocModal);
+
+    const closeExtraModal = document.getElementById('closeUploadExtraDocModal');
+    if (closeExtraModal) closeExtraModal.addEventListener('click', closeUploadExtraDocModal);
+
+    const closeExtraModalBtn = document.getElementById('closeUploadExtraDocModalBtn');
+    if (closeExtraModalBtn) closeExtraModalBtn.addEventListener('click', closeUploadExtraDocModal);
+
+    const confirmExtraBtn = document.getElementById('confirmUploadExtraDocBtn');
+    if (confirmExtraBtn) confirmExtraBtn.addEventListener('click', confirmUploadExtraDoc);
+
+    const extraFileInput = document.getElementById('extraDocFileInput');
+    if (extraFileInput) extraFileInput.addEventListener('change', handleExtraDocFileSelect);
+
+    const extraDropZone = document.getElementById('extraDocDropZone');
+    if (extraDropZone) {
+        extraDropZone.addEventListener('click', () => {
+            const fi = document.getElementById('extraDocFileInput');
+            if (fi) fi.click();
+        });
+    }
 }
 
 function restoreAdminSession() {
@@ -3012,3 +3305,9 @@ window.closeQrCodeModal = closeQrCodeModal;
 window.copyStudentDirectLink = copyStudentDirectLink;
 window.downloadQrPng = downloadQrPng;
 window.printQrCard = printQrCard;
+window.openUploadExtraDocModal = openUploadExtraDocModal;
+window.closeUploadExtraDocModal = closeUploadExtraDocModal;
+window.handleExtraDocFileSelect = handleExtraDocFileSelect;
+window.confirmUploadExtraDoc = confirmUploadExtraDoc;
+window.deleteExtraDoc = deleteExtraDoc;
+window.viewExtraDoc = viewExtraDoc;
