@@ -93,10 +93,10 @@
                     <div class="document-section">
                         <h3 style="font-size:1.2rem; font-weight:700; margin-bottom:20px; display:flex; align-items:center; gap:10px;">
                             <i class="fas fa-folder-open"></i> เอกสารประกอบ
-                            <span style="font-weight:400; font-size:0.9rem; color:var(--text-muted); margin-left:auto;">ทั้งหมด 8 เอกสาร</span>
+                            <span style="font-weight:400; font-size:0.9rem; color:var(--text-muted); margin-left:auto;">เอกสารหลัก 12 รายการ + เอกสารเพิ่มเติม</span>
                         </h3>
 
-                        <div style="margin: 20px 0 10px;"><h4 style="color:var(--primary);"><i class="fas fa-user-graduate"></i> เอกสารนักศึกษา</h4></div>
+                        <div style="margin: 20px 0 10px;"><h4 style="color:var(--primary);"><i class="fas fa-user-graduate"></i> เอกสารส่วนตัว & การศึกษานักศึกษา</h4></div>
                         <div class="document-grid" id="studentDocsGrid"></div>
 
                         <div style="margin: 20px 0 10px;"><h4 style="color:var(--primary);"><i class="fas fa-users"></i> ผู้ปกครอง (พ่อ)</h4></div>
@@ -107,6 +107,17 @@
 
                         <div style="margin: 20px 0 10px;"><h4 style="color:var(--primary);"><i class="fas fa-user-tie"></i> ผู้ปกครองอื่น</h4></div>
                         <div class="document-grid" id="otherDocsGrid"></div>
+
+                        <!-- Extra Documents Section -->
+                        <div style="margin: 28px 0 12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; padding-top:16px; border-top:1px dashed rgba(0,0,0,0.1);">
+                            <h4 style="color:var(--primary); margin:0;">
+                                <i class="fas fa-folder-plus"></i> เอกสารอื่นๆ เพิ่มเติม (กำหนดเอง)
+                            </h4>
+                            <button type="button" class="btn btn-primary btn-sm" id="openUploadExtraDocBtn">
+                                <i class="fas fa-plus-circle"></i> อัปโหลดเอกสารเพิ่มเติม
+                            </button>
+                        </div>
+                        <div class="document-grid" id="extraDocsGrid"></div>
                     </div>
                 </div>
             </div>
@@ -937,6 +948,39 @@
                 </div>
                 <button type="button" class="btn btn-outline btn-sm" id="closeQrCodeModalBtn">
                     <i class="fas fa-times"></i> ปิด
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Extra Document Modal -->
+    <div class="modal" id="uploadExtraDocModal">
+        <div class="modal-content" style="max-width:540px;">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fas fa-file-upload"></i> อัปโหลดเอกสารอื่นๆ เพิ่มเติม</h3>
+                <button class="modal-close" id="closeUploadExtraDocModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group" style="margin-bottom:16px;">
+                    <label for="extraDocTitleInput" style="font-weight:600; color:var(--secondary); display:block; margin-bottom:6px;">
+                        <i class="fas fa-tag" style="color:var(--primary);"></i> ชื่อเอกสาร / รายละเอียด <span style="color:var(--danger);">*</span>
+                    </label>
+                    <input type="text" id="extraDocTitleInput" class="form-control" placeholder="เช่น ใบรับรองแพทย์, เอกสารขอผ่อนผัน, ใบเกียรติบัตร" required />
+                </div>
+                <div class="drop-zone" id="extraDocDropZone">
+                    <i class="fas fa-cloud-upload-alt drop-icon"></i>
+                    <p>ลากไฟล์มาวางที่นี่ หรือ <span>เลือกไฟล์</span></p>
+                    <p class="file-hint">รองรับ PDF, JPG, PNG, WebP (บีบอัดอัตโนมัติ)</p>
+                    <input type="file" id="extraDocFileInput" class="file-input" accept="application/pdf,image/jpeg,image/png,image/webp" />
+                </div>
+                <div id="extraDocFilePreview" class="file-preview" style="display:none; margin-top:12px;">
+                    <div id="extraDocFileName"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline" id="closeUploadExtraDocModalBtn">ยกเลิก</button>
+                <button type="button" class="btn btn-primary" id="confirmUploadExtraDocBtn">
+                    <i class="fas fa-upload"></i> ยืนยันการอัปโหลด
                 </button>
             </div>
         </div>
